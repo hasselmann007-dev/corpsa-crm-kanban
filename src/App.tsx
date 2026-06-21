@@ -51,11 +51,38 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
 
   // Authentication State
-  const [isAuthenticated, setIsAuthenticated] = useState(localStorage.getItem('corpsa_auth') === 'true');
-  const [username, setUsername] = useState('');
+  const [session, setSession] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<{ id: string; nome_completo: string; cargo: string } | null>(null);
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [signUpForm, setSignUpForm] = useState({
+    nome_completo: '',
+    cargo: 'Assessor',
+    email: '',
+    password: '',
+    confirmPassword: ''
+  });
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
+  const [signUpError, setSignUpError] = useState('');
+  const [signUpLoading, setSignUpLoading] = useState(false);
+
+  // Profile Modal State
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profileTab, setProfileTab] = useState<'info' | 'password'>('info');
+  const [profileForm, setProfileForm] = useState({
+    nome_completo: '',
+    cargo: ''
+  });
+  const [profileErrors, setProfileErrors] = useState<Record<string, string>>({});
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [pwdForm, setPwdForm] = useState({
+    password: '',
+    confirmPassword: ''
+  });
+  const [pwdErrors, setPwdErrors] = useState<Record<string, string>>({});
+  const [pwdLoading, setPwdLoading] = useState(false);
 
   // Modals state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -102,41 +129,196 @@ function App() {
   });
   const [transitionFormErrors, setTransitionFormErrors] = useState<Record<string, string>>({});
 
-  const handleLogin = (e: React.FormEvent) => {
+  // Fetch session and set up auth listener
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) {
+        fetchProfile(session.user.id);
+        fetchLeads();
+      } else {
+        setLoading(false);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        fetchProfile(session.user.id);
+        fetchLeads();
+      } else {
+        setUserProfile(null);
+        setLeads([]);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchProfile = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (error) throw error;
+      if (data) {
+        setUserProfile(data);
+        setProfileForm({
+          nome_completo: data.nome_completo || '',
+          cargo: data.cargo || 'Assessor'
+        });
+      }
+    } catch (err: any) {
+      console.error('Erro ao buscar perfil:', err.message);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
 
-    if (!username.trim() || !password) {
+    if (!email.trim() || !password) {
       setLoginError('Preencha todos os campos.');
       return;
     }
 
     setLoginLoading(true);
-
-    setTimeout(() => {
-      if (username.trim() === 'admin' && password === 'admin123') {
-        localStorage.setItem('corpsa_auth', 'true');
-        setIsAuthenticated(true);
-        setUsername('');
-        setPassword('');
-        showToast('Login realizado com sucesso!', 'success');
-      } else {
-        setLoginError('Usuário ou senha incorretos.');
-      }
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password
+      });
+      if (error) throw error;
+      showToast('Login realizado com sucesso!', 'success');
+    } catch (err: any) {
+      setLoginError(err.message || 'Erro ao realizar login.');
+    } finally {
       setLoginLoading(false);
-    }, 800);
+    }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('corpsa_auth');
-    setIsAuthenticated(false);
-    showToast('Sessão encerrada com sucesso!', 'success');
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignUpError('');
+
+    if (!signUpForm.nome_completo.trim() || !signUpForm.email.trim() || !signUpForm.password || !signUpForm.confirmPassword) {
+      setSignUpError('Preencha todos os campos.');
+      return;
+    }
+
+    if (signUpForm.password !== signUpForm.confirmPassword) {
+      setSignUpError('As senhas não coincidem.');
+      return;
+    }
+
+    if (signUpForm.password.length < 6) {
+      setSignUpError('A senha deve conter no mínimo 6 caracteres.');
+      return;
+    }
+
+    setSignUpLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: signUpForm.email.trim(),
+        password: signUpForm.password,
+        options: {
+          data: {
+            nome_completo: signUpForm.nome_completo.trim(),
+            cargo: signUpForm.cargo
+          }
+        }
+      });
+      if (error) throw error;
+      
+      if (data.session) {
+        showToast('Cadastro realizado com sucesso!', 'success');
+      } else {
+        showToast('Cadastro realizado! Se a confirmação de e-mail estiver activa, verifique sua caixa de entrada.', 'success');
+        setIsSignUp(false);
+      }
+    } catch (err: any) {
+      setSignUpError(err.message || 'Erro ao realizar cadastro.');
+    } finally {
+      setSignUpLoading(false);
+    }
   };
 
-  // Fetch leads on load
-  useEffect(() => {
-    fetchLeads();
-  }, []);
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+      showToast('Sessão encerrada com sucesso!', 'success');
+    } catch (err: any) {
+      showToast('Erro ao encerrar sessão.', 'error');
+    }
+  };
+
+  const handleProfileUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProfileErrors({});
+    if (!profileForm.nome_completo.trim()) {
+      setProfileErrors({ nome_completo: 'O nome completo é obrigatório.' });
+      return;
+    }
+
+    setProfileLoading(true);
+    try {
+      if (!session?.user?.id) return;
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          nome_completo: profileForm.nome_completo.trim(),
+          cargo: profileForm.cargo
+        })
+        .eq('id', session.user.id);
+      
+      if (error) throw error;
+      
+      showToast('Perfil atualizado com sucesso!', 'success');
+      fetchProfile(session.user.id);
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao atualizar perfil.', 'error');
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handlePasswordUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwdErrors({});
+
+    if (!pwdForm.password || !pwdForm.confirmPassword) {
+      setPwdErrors({ general: 'Preencha as duas senhas.' });
+      return;
+    }
+
+    if (pwdForm.password !== pwdForm.confirmPassword) {
+      setPwdErrors({ confirmPassword: 'As senhas não coincidem.' });
+      return;
+    }
+
+    if (pwdForm.password.length < 6) {
+      setPwdErrors({ password: 'A nova senha deve ter pelo menos 6 caracteres.' });
+      return;
+    }
+
+    setPwdLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: pwdForm.password
+      });
+      if (error) throw error;
+
+      showToast('Senha atualizada com sucesso!', 'success');
+      setPwdForm({ password: '', confirmPassword: '' });
+    } catch (err: any) {
+      setPwdErrors({ general: err.message || 'Erro ao atualizar senha.' });
+    } finally {
+      setPwdLoading(false);
+    }
+  };
 
   const fetchLeads = async () => {
     setLoading(true);
@@ -542,7 +724,7 @@ function App() {
 
       if (error) throw error;
 
-      showToast('Lead updated successfully!', 'success');
+      showToast('Lead atualizado com sucesso!', 'success');
       setSelectedLead(null);
       fetchLeads();
     } catch (err: any) {
@@ -634,7 +816,7 @@ function App() {
     }).format(val);
   };
 
-  if (!isAuthenticated) {
+  if (!session) {
     return (
       <div className="login-container">
         {/* Toast Warnings inside login */}
@@ -659,48 +841,158 @@ function App() {
             <div className="login-subtitle">Assessoria de Crédito</div>
           </div>
 
-          <form className="login-form" onSubmit={handleLogin}>
-            <div className="login-field">
-              <label htmlFor="username">Usuário</label>
-              <div className="login-input-wrapper">
-                <FiUsers size={16} />
-                <input 
-                  type="text" 
-                  id="username" 
-                  className="login-input" 
-                  placeholder="Seu usuário (admin)"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                />
+          {!isSignUp ? (
+            // Sign In View
+            <form className="login-form" onSubmit={handleLogin}>
+              <div className="login-field">
+                <label htmlFor="email">E-mail</label>
+                <div className="login-input-wrapper">
+                  <FiUsers size={16} />
+                  <input 
+                    type="email" 
+                    id="email" 
+                    className="login-input" 
+                    placeholder="Seu e-mail"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
 
-            <div className="login-field">
-              <label htmlFor="password">Senha</label>
-              <div className="login-input-wrapper">
-                <FiLock size={16} />
-                <input 
-                  type="password" 
-                  id="password" 
-                  className="login-input" 
-                  placeholder="Sua senha (admin123)"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
+              <div className="login-field">
+                <label htmlFor="password">Senha</label>
+                <div className="login-input-wrapper">
+                  <FiLock size={16} />
+                  <input 
+                    type="password" 
+                    id="password" 
+                    className="login-input" 
+                    placeholder="Sua senha"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
 
-            {loginError && (
-              <div className="login-error-msg">
-                <FiAlertCircle size={16} />
-                <span>{loginError}</span>
+              {loginError && (
+                <div className="login-error-msg">
+                  <FiAlertCircle size={16} />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <button type="submit" className="login-btn" disabled={loginLoading}>
+                {loginLoading ? 'Carregando...' : 'Acessar CRM'}
+              </button>
+
+              <button 
+                type="button" 
+                className="btn-link" 
+                onClick={() => { setIsSignUp(true); setLoginError(''); }}
+                style={{ background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: '0.8rem', cursor: 'pointer', marginTop: '8px', fontWeight: 600 }}
+              >
+                Não tem uma conta? Cadastre-se
+              </button>
+            </form>
+          ) : (
+            // Sign Up View
+            <form className="login-form" onSubmit={handleSignUp}>
+              <div className="login-field">
+                <label htmlFor="signUpName">Nome Completo</label>
+                <div className="login-input-wrapper">
+                  <FiUsers size={16} />
+                  <input 
+                    type="text" 
+                    id="signUpName" 
+                    className="login-input" 
+                    placeholder="Seu nome"
+                    value={signUpForm.nome_completo}
+                    onChange={(e) => setSignUpForm(prev => ({ ...prev, nome_completo: e.target.value }))}
+                  />
+                </div>
               </div>
-            )}
 
-            <button type="submit" className="login-btn" disabled={loginLoading}>
-              {loginLoading ? 'Carregando...' : 'Acessar CRM'}
-            </button>
-          </form>
+              <div className="login-field">
+                <label htmlFor="signUpCargo">Cargo / Função</label>
+                <div className="login-input-wrapper">
+                  <FiFileText size={16} />
+                  <input 
+                    type="text" 
+                    id="signUpCargo" 
+                    className="login-input" 
+                    placeholder="Ex: Assessor Correspondente"
+                    value={signUpForm.cargo}
+                    onChange={(e) => setSignUpForm(prev => ({ ...prev, cargo: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="signUpEmail">E-mail</label>
+                <div className="login-input-wrapper">
+                  <FiUsers size={16} />
+                  <input 
+                    type="email" 
+                    id="signUpEmail" 
+                    className="login-input" 
+                    placeholder="Seu e-mail"
+                    value={signUpForm.email}
+                    onChange={(e) => setSignUpForm(prev => ({ ...prev, email: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="signUpPassword">Senha</label>
+                <div className="login-input-wrapper">
+                  <FiLock size={16} />
+                  <input 
+                    type="password" 
+                    id="signUpPassword" 
+                    className="login-input" 
+                    placeholder="Mínimo 6 caracteres"
+                    value={signUpForm.password}
+                    onChange={(e) => setSignUpForm(prev => ({ ...prev, password: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="signUpConfirmPassword">Confirmar Senha</label>
+                <div className="login-input-wrapper">
+                  <FiLock size={16} />
+                  <input 
+                    type="password" 
+                    id="signUpConfirmPassword" 
+                    className="login-input" 
+                    placeholder="Repita a senha"
+                    value={signUpForm.confirmPassword}
+                    onChange={(e) => setSignUpForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              {signUpError && (
+                <div className="login-error-msg">
+                  <FiAlertCircle size={16} />
+                  <span>{signUpError}</span>
+                </div>
+              )}
+
+              <button type="submit" className="login-btn" disabled={signUpLoading}>
+                {signUpLoading ? 'Cadastrando...' : 'Criar Conta'}
+              </button>
+
+              <button 
+                type="button" 
+                className="btn-link" 
+                onClick={() => { setIsSignUp(false); setSignUpError(''); }}
+                style={{ background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: '0.8rem', cursor: 'pointer', marginTop: '8px', fontWeight: 600 }}
+              >
+                Já tem uma conta? Faça Login
+              </button>
+            </form>
+          )}
 
           <div className="login-footer-text">
             CORPSA CRM © {new Date().getFullYear()} - Todos os direitos reservados.
@@ -762,11 +1054,18 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
-          <div className="user-profile">
-            <div className="user-avatar">CO</div>
+          <div 
+            className="user-profile" 
+            onClick={() => setShowProfileModal(true)}
+            style={{ cursor: 'pointer', transition: 'var(--transition-fast)' }}
+            title="Editar meu perfil / alterar senha"
+          >
+            <div className="user-avatar">
+              {(userProfile?.nome_completo || 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+            </div>
             <div className="user-info">
-              <span className="user-name">Carlos Oliveira</span>
-              <span className="user-role">Assessor Correspondente</span>
+              <span className="user-name">{userProfile?.nome_completo || session?.user?.email || 'Carregando...'}</span>
+              <span className="user-role">{userProfile?.cargo || 'Assessor'}</span>
             </div>
           </div>
           <button className="btn-logout" onClick={handleLogout}>
@@ -1491,6 +1790,136 @@ function App() {
                 <button type="submit" className="btn btn-primary">Salvar Alterações</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: View & Edit My Profile / Change Password */}
+      {showProfileModal && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h2 className="modal-title">Configurações de Perfil</h2>
+              <button className="modal-close" onClick={() => setShowProfileModal(false)}>
+                <FiX size={20} />
+              </button>
+            </div>
+            
+            {/* Modal Tabs */}
+            <div className="profile-tabs" style={{ display: 'flex', borderBottom: '1px solid var(--color-border)', marginBottom: '16px' }}>
+              <button 
+                type="button" 
+                className={`profile-tab-btn ${profileTab === 'info' ? 'active' : ''}`}
+                onClick={() => setProfileTab('info')}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: profileTab === 'info' ? '2px solid var(--color-primary)' : 'none',
+                  color: profileTab === 'info' ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Editar Perfil
+              </button>
+              <button 
+                type="button" 
+                className={`profile-tab-btn ${profileTab === 'password' ? 'active' : ''}`}
+                onClick={() => setProfileTab('password')}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: profileTab === 'password' ? '2px solid var(--color-primary)' : 'none',
+                  color: profileTab === 'password' ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Alterar Senha
+              </button>
+            </div>
+
+            {profileTab === 'info' ? (
+              <form onSubmit={handleProfileUpdate}>
+                <div className="modal-body" style={{ padding: '0 0 16px 0' }}>
+                  <div className="form-group">
+                    <label htmlFor="profileName">Nome Completo *</label>
+                    <input 
+                      type="text" 
+                      id="profileName"
+                      className="form-control" 
+                      value={profileForm.nome_completo}
+                      onChange={(e) => setProfileForm(prev => ({ ...prev, nome_completo: e.target.value }))}
+                    />
+                    {profileErrors.nome_completo && <span className="form-error">{profileErrors.nome_completo}</span>}
+                  </div>
+
+                  <div className="form-group" style={{ marginTop: '12px' }}>
+                    <label htmlFor="profileCargo">Cargo / Função</label>
+                    <input 
+                      type="text" 
+                      id="profileCargo"
+                      className="form-control" 
+                      value={profileForm.cargo}
+                      onChange={(e) => setProfileForm(prev => ({ ...prev, cargo: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer" style={{ padding: '16px 0 0 0', borderTop: '1px solid var(--color-border)' }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowProfileModal(false)}>Cancelar</button>
+                  <button type="submit" className="btn btn-primary" disabled={profileLoading}>
+                    {profileLoading ? 'Salvando...' : 'Salvar Alterações'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handlePasswordUpdate}>
+                <div className="modal-body" style={{ padding: '0 0 16px 0' }}>
+                  {pwdErrors.general && (
+                    <div className="login-error-msg" style={{ marginBottom: '12px' }}>
+                      <FiAlertCircle size={16} />
+                      <span>{pwdErrors.general}</span>
+                    </div>
+                  )}
+
+                  <div className="form-group">
+                    <label htmlFor="newPassword">Nova Senha *</label>
+                    <input 
+                      type="password" 
+                      id="newPassword"
+                      className="form-control" 
+                      placeholder="Mínimo 6 caracteres"
+                      value={pwdForm.password}
+                      onChange={(e) => setPwdForm(prev => ({ ...prev, password: e.target.value }))}
+                    />
+                    {pwdErrors.password && <span className="form-error">{pwdErrors.password}</span>}
+                  </div>
+
+                  <div className="form-group" style={{ marginTop: '12px' }}>
+                    <label htmlFor="confirmNewPassword">Confirmar Nova Senha *</label>
+                    <input 
+                      type="password" 
+                      id="confirmNewPassword"
+                      className="form-control" 
+                      placeholder="Repita a nova senha"
+                      value={pwdForm.password}
+                      onChange={(e) => setPwdForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                    />
+                    {pwdErrors.confirmPassword && <span className="form-error">{pwdErrors.confirmPassword}</span>}
+                  </div>
+                </div>
+                <div className="modal-footer" style={{ padding: '16px 0 0 0', borderTop: '1px solid var(--color-border)' }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowProfileModal(false)}>Cancelar</button>
+                  <button type="submit" className="btn btn-primary" disabled={pwdLoading}>
+                    {pwdLoading ? 'Atualizando...' : 'Atualizar Senha'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

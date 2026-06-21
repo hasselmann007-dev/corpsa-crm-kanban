@@ -125,10 +125,6 @@ body {
   transform: translateY(-1px);
 }
 
-.btn-new-lead:active {
-  transform: translateY(0);
-}
-
 .sidebar-nav {
   display: flex;
   flex-direction: column;
@@ -848,4 +844,27 @@ body {
   background-color: rgba(239, 68, 68, 0.1);
   color: #ef4444;
   border-color: rgba(239, 68, 68, 0.2);
+}
+
+.btn-link:hover {
+  color: var(--color-primary-hover) !important;
+  text-decoration: underline;
+}
+
+.profile-tab-btn {
+  transition: var(--transition-fast);
+}
+
+.profile-tab-btn:hover {
+  background-color: rgba(0, 0, 0, 0.02) !important;
+  color: var(--color-text-dark) !important;
+}
+
+.user-profile {
+  padding: 8px;
+  border-radius: var(--radius-sm);
+}
+
+.user-profile:hover {
+  background-color: rgba(255, 255, 255, 0.05);
 }
