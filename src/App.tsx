@@ -15,7 +15,8 @@ import {
   FiLock,
   FiTrendingUp,
   FiHelpCircle,
-  FiHome
+  FiHome,
+  FiFlag
 } from 'react-icons/fi';
 
 interface Lead {
@@ -35,6 +36,7 @@ interface Lead {
   tipo_financiamento?: 'SBPE' | 'MCMV';
   categoria?: string;
   adicionado_corpay: boolean;
+  prioridade?: 'Baixa' | 'Média' | 'Alta';
 }
 
 const COLUMNS = [
@@ -103,7 +105,8 @@ function App() {
     motivo_resultado: '',
     tipo_avaliacao: '',
     tipo_financiamento: '',
-    categoria: ''
+    categoria: '',
+    prioridade: 'Baixa'
   });
   const [editFormErrors, setEditFormErrors] = useState<Record<string, string>>({});
 
@@ -117,7 +120,8 @@ function App() {
     valor_imovel: '',
     cidade: '',
     grupo_origem: '',
-    informacoes_importantes: ''
+    informacoes_importantes: '',
+    prioridade: 'Baixa'
   });
   const [addFormErrors, setAddFormErrors] = useState<Record<string, string>>({});
 
@@ -236,7 +240,7 @@ function App() {
       if (data.session) {
         showToast('Cadastro realizado com sucesso!', 'success');
       } else {
-        showToast('Cadastro realizado! Se a confirmação de e-mail estiver activa, verifique sua caixa de entrada.', 'success');
+        showToast('Cadastro realizado! Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.', 'success');
         setIsSignUp(false);
       }
     } catch (err: any) {
@@ -411,7 +415,8 @@ function App() {
         cidade: newLead.cidade.trim(),
         grupo_origem: newLead.grupo_origem.trim(),
         informacoes_importantes: newLead.informacoes_importantes.trim() || null,
-        etapa: 'Roleta'
+        etapa: 'Roleta',
+        prioridade: newLead.prioridade || 'Baixa'
       });
 
       if (error) throw error;
@@ -424,7 +429,8 @@ function App() {
         valor_imovel: '',
         cidade: '',
         grupo_origem: '',
-        informacoes_importantes: ''
+        informacoes_importantes: '',
+        prioridade: 'Baixa'
       });
       fetchLeads();
     } catch (err: any) {
@@ -433,53 +439,12 @@ function App() {
   };
 
   // State Transition Constraints Check
-  const checkTransitionAllowed = (current: string, target: string): { allowed: boolean; reason?: string } => {
-    if (current === target) return { allowed: true };
-    
-    if (current === 'Roleta') {
-      if (target === 'Pendencia' || target === 'Analise') return { allowed: true };
-      return { 
-        allowed: false, 
-        reason: 'A partir de ROLETA / AVALIAR, o lead só pode ir para DEMANDA OPERACIONAL / PENDÊNCIA ou ANÁLISE DE CRÉDITO.' 
-      };
-    }
-    
-    if (current === 'Pendencia') {
-      if (target === 'Analise') return { allowed: true };
-      return { 
-        allowed: false, 
-        reason: 'A partir de DEMANDA OPERACIONAL / PENDÊNCIA, o lead só pode seguir para ANÁLISE DE CRÉDITO.' 
-      };
-    }
-    
-    if (current === 'Analise') {
-      if (target === 'Conclusao' || target === 'Pendencia') return { allowed: true };
-      return { 
-        allowed: false, 
-        reason: 'A partir de ANÁLISE DE CRÉDITO, o lead só pode seguir para CONCLUSÃO ou retornar para DEMANDA OPERACIONAL / PENDÊNCIA.' 
-      };
-    }
-    
-    if (current === 'Conclusao') {
-      // Allow moving back to Analise or Pendencia for re-edits if required,
-      // but standard rule blocks arbitrary moves. Let's allow returning to Analise or Pendencia if they need re-evaluation.
-      // Wait, let's keep Conclusao transitions blocked unless they edit within the card.
-      return { 
-        allowed: false, 
-        reason: 'Ciclo concluído. Leads na coluna de CONCLUSÃO estão congelados no Kanban.' 
-      };
-    }
-
-    return { allowed: false, reason: 'Transição não permitida.' };
+  const checkTransitionAllowed = (_current: string, _target: string): { allowed: boolean; reason?: string } => {
+    return { allowed: true };
   };
 
   // HTML5 Drag & Drop handlers
   const handleDragStart = (e: React.DragEvent, lead: Lead) => {
-    if (lead.etapa === 'Conclusao') {
-      e.preventDefault();
-      showToast('Cards em Conclusão devem ser editados clicando no card.', 'warning');
-      return;
-    }
     e.dataTransfer.setData('text/plain', lead.id);
   };
 
@@ -611,7 +576,8 @@ function App() {
       motivo_resultado: lead.motivo_resultado || '',
       tipo_avaliacao: lead.tipo_avaliacao || '',
       tipo_financiamento: lead.tipo_financiamento || '',
-      categoria: lead.categoria || ''
+      categoria: lead.categoria || '',
+      prioridade: lead.prioridade || 'Baixa'
     });
     setEditFormErrors({});
   };
@@ -682,6 +648,9 @@ function App() {
 
     try {
       const updateData: any = {};
+
+      // Always update priority
+      updateData.prioridade = editForm.prioridade || 'Baixa';
 
       // If in Roleta or Conclusao, save basic fields
       if (selectedLead.etapa === 'Roleta' || selectedLead.etapa === 'Conclusao') {
@@ -1232,12 +1201,23 @@ function App() {
                             <div 
                               key={lead.id} 
                               className="lead-card"
-                              draggable={lead.etapa !== 'Conclusao'}
+                              draggable={true}
                               onDragStart={(e) => handleDragStart(e, lead)}
                               onClick={() => handleCardClick(lead)}
                             >
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span className="card-bank">{lead.grupo_origem}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span className="card-bank">{lead.grupo_origem}</span>
+                                  {lead.prioridade && (
+                                    <span 
+                                      className={`priority-badge priority-${lead.prioridade.toLowerCase()}`}
+                                      title={`Prioridade ${lead.prioridade}`}
+                                    >
+                                      <FiFlag size={10} />
+                                      {lead.prioridade}
+                                    </span>
+                                  )}
+                                </div>
                                 {lead.etapa === 'Conclusao' && (
                                   <FiCheckCircle style={{ color: 'var(--color-conclusao)' }} title="Processo concluído" />
                                 )}
@@ -1395,6 +1375,20 @@ function App() {
                   {addFormErrors.grupo_origem && <span className="form-error">{addFormErrors.grupo_origem}</span>}
                 </div>
 
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label htmlFor="prioridade">Prioridade *</label>
+                  <select 
+                    id="prioridade"
+                    className="form-control"
+                    value={newLead.prioridade || 'Baixa'}
+                    onChange={(e) => setNewLead(prev => ({ ...prev, prioridade: e.target.value as any }))}
+                  >
+                    <option value="Baixa">Baixa</option>
+                    <option value="Média">Média</option>
+                    <option value="Alta">Alta</option>
+                  </select>
+                </div>
+
                 <div className="form-group">
                   <label htmlFor="informacoes_importantes">Informações Importantes (Notas)</label>
                   <textarea 
@@ -1521,6 +1515,21 @@ function App() {
                   </div>
                 )}
 
+                {/* Prioridade do Lead */}
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label htmlFor="edit_prioridade">Prioridade *</label>
+                  <select 
+                    id="edit_prioridade"
+                    className="form-control"
+                    value={editForm.prioridade || 'Baixa'}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, prioridade: e.target.value as any }))}
+                  >
+                    <option value="Baixa">Baixa</option>
+                    <option value="Média">Média</option>
+                    <option value="Alta">Alta</option>
+                  </select>
+                </div>
+
                 {/* If stage is Roleta OR stage is Conclusao: show basic client & property fields */}
                 {(selectedLead.etapa === 'Roleta' || selectedLead.etapa === 'Conclusao') && (
                   <>
@@ -1589,7 +1598,7 @@ function App() {
                       <FiFileText style={{ color: 'var(--color-primary)' }} />
                       <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Origem e Observações</span>
                     </div>
-
+                    
                     <div className="form-group">
                       <label htmlFor="edit_grupo_origem">Grupo de Origem (WhatsApp/Canal) *</label>
                       <input 
@@ -1658,7 +1667,7 @@ function App() {
                         <option value="Reprovado">Reprovado</option>
                         <option value="Segue Pendente de Documento">Segue Pendente de Documento</option>
                       </select>
-                      {editFormErrors.resultado_analise && <span className="form-error">{editFormErrors.resultado_analise}</span>}
+                      {editFormErrors.edit_resultado_analise && <span className="form-error">{editFormErrors.edit_resultado_analise}</span>}
                     </div>
 
                     {(editForm.resultado_analise === 'Condicionado' || 
@@ -1906,7 +1915,7 @@ function App() {
                       id="confirmNewPassword"
                       className="form-control" 
                       placeholder="Repita a nova senha"
-                      value={pwdForm.password}
+                      value={pwdForm.confirmPassword}
                       onChange={(e) => setPwdForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
                     />
                     {pwdErrors.confirmPassword && <span className="form-error">{pwdErrors.confirmPassword}</span>}
