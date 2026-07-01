@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
+import { parseRawText } from './utils/parser';
+import type { Session } from '@supabase/supabase-js';
 import { 
   FiPlus, 
   FiSearch, 
@@ -53,7 +55,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
 
   // Authentication State
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [userProfile, setUserProfile] = useState<{ id: string; nome_completo: string; cargo: string } | null>(null);
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
@@ -114,15 +116,7 @@ function App() {
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'warning' | 'error' | 'success' }[]>([]);
 
   // Add Lead Form State
-  const [newLead, setNewLead] = useState({
-    nome_cliente: '',
-    cpf_cliente: '',
-    valor_imovel: '',
-    cidade: '',
-    grupo_origem: '',
-    informacoes_importantes: '',
-    prioridade: 'Baixa'
-  });
+  const [rawText, setRawText] = useState('');
   const [addFormErrors, setAddFormErrors] = useState<Record<string, string>>({});
 
   // Transition Modal Form State
@@ -132,6 +126,51 @@ function App() {
     motivo_resultado: ''
   });
   const [transitionFormErrors, setTransitionFormErrors] = useState<Record<string, string>>({});
+
+  const showToast = useCallback((message: string, type: 'warning' | 'error' | 'success' = 'warning') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  }, []);
+
+  const fetchProfile = useCallback(async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (error) throw error;
+      if (data) {
+        setUserProfile(data);
+        setProfileForm({
+          nome_completo: data.nome_completo || '',
+          cargo: data.cargo || 'Assessor'
+        });
+      }
+    } catch (err) {
+      console.error('Erro ao buscar perfil:', err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const fetchLeads = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .order('data_hora_entrada', { ascending: false });
+
+      if (error) throw error;
+      setLeads(data || []);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao carregar leads.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [showToast]);
 
   // Fetch session and set up auth listener
   useEffect(() => {
@@ -158,27 +197,7 @@ function App() {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
-
-  const fetchProfile = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      if (error) throw error;
-      if (data) {
-        setUserProfile(data);
-        setProfileForm({
-          nome_completo: data.nome_completo || '',
-          cargo: data.cargo || 'Assessor'
-        });
-      }
-    } catch (err: any) {
-      console.error('Erro ao buscar perfil:', err.message);
-    }
-  };
+  }, [fetchProfile, fetchLeads]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -197,8 +216,8 @@ function App() {
       });
       if (error) throw error;
       showToast('Login realizado com sucesso!', 'success');
-    } catch (err: any) {
-      setLoginError(err.message || 'Erro ao realizar login.');
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Erro ao realizar login.');
     } finally {
       setLoginLoading(false);
     }
@@ -243,8 +262,8 @@ function App() {
         showToast('Cadastro realizado! Se a confirmação de e-mail estiver ativa, verifique sua caixa de entrada.', 'success');
         setIsSignUp(false);
       }
-    } catch (err: any) {
-      setSignUpError(err.message || 'Erro ao realizar cadastro.');
+    } catch (err) {
+      setSignUpError(err instanceof Error ? err.message : 'Erro ao realizar cadastro.');
     } finally {
       setSignUpLoading(false);
     }
@@ -254,7 +273,7 @@ function App() {
     try {
       await supabase.auth.signOut();
       showToast('Sessão encerrada com sucesso!', 'success');
-    } catch (err: any) {
+    } catch {
       showToast('Erro ao encerrar sessão.', 'error');
     }
   };
@@ -282,8 +301,8 @@ function App() {
       
       showToast('Perfil atualizado com sucesso!', 'success');
       fetchProfile(session.user.id);
-    } catch (err: any) {
-      showToast(err.message || 'Erro ao atualizar perfil.', 'error');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao atualizar perfil.', 'error');
     } finally {
       setProfileLoading(false);
     }
@@ -317,36 +336,11 @@ function App() {
 
       showToast('Senha atualizada com sucesso!', 'success');
       setPwdForm({ password: '', confirmPassword: '' });
-    } catch (err: any) {
-      setPwdErrors({ general: err.message || 'Erro ao atualizar senha.' });
+    } catch (err) {
+      setPwdErrors({ general: err instanceof Error ? err.message : 'Erro ao atualizar senha.' });
     } finally {
       setPwdLoading(false);
     }
-  };
-
-  const fetchLeads = async () => {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('leads')
-        .select('*')
-        .order('data_hora_entrada', { ascending: false });
-
-      if (error) throw error;
-      setLeads(data || []);
-    } catch (err: any) {
-      showToast(err.message || 'Erro ao carregar leads.', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const showToast = (message: string, type: 'warning' | 'error' | 'success' = 'warning') => {
-    const id = Math.random().toString(36).substring(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
   };
 
   // Masking helpers
@@ -379,67 +373,68 @@ function App() {
     return parseFloat(digits) / 100;
   };
 
-  // Validation
-  const validateAddForm = () => {
-    const errors: Record<string, string> = {};
-    if (!newLead.nome_cliente.trim()) errors.nome_cliente = 'Nome do cliente é obrigatório.';
-    
-    const cpfClean = newLead.cpf_cliente.replace(/\D/g, '');
-    if (cpfClean.length !== 11) {
-      errors.cpf_cliente = 'CPF inválido. Deve possuir 11 dígitos.';
-    } else if (!/^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(newLead.cpf_cliente)) {
-      errors.cpf_cliente = 'CPF deve estar no formato 000.000.000-00.';
-    }
-    
-    const value = parseCurrency(newLead.valor_imovel);
-    if (!newLead.valor_imovel || value <= 0) {
-      errors.valor_imovel = 'Valor do imóvel deve ser maior que R$ 0,00.';
-    }
-    
-    if (!newLead.cidade.trim()) errors.cidade = 'Cidade é obrigatória.';
-    if (!newLead.grupo_origem.trim()) errors.grupo_origem = 'Grupo de WhatsApp de origem é obrigatório.';
-
-    setAddFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
   const handleAddLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validateAddForm()) return;
+    setAddFormErrors({});
+
+    const errors: Record<string, string> = {};
+    if (!rawText.trim()) {
+      errors.raw_text = 'O texto do lead é obrigatório.';
+      setAddFormErrors(errors);
+      return;
+    }
+
+    const parsed = parseRawText(rawText);
+
+    if (!parsed.nome_cliente) {
+      errors.nome_cliente = 'Nome do cliente não pôde ser extraído do texto.';
+    }
+    if (!parsed.cpf_cliente) {
+      errors.cpf_cliente = 'CPF do cliente não pôde ser extraído ou é inválido.';
+    }
+    if (parsed.valor_imovel <= 0) {
+      errors.valor_imovel = 'Valor do imóvel não pôde ser extraído ou é inválido.';
+    }
+
+    setAddFormErrors(errors);
+    if (Object.keys(errors).length > 0) return;
 
     try {
-      const { error } = await supabase.from('leads').insert({
-        nome_cliente: newLead.nome_cliente.trim(),
-        cpf_cliente: newLead.cpf_cliente,
-        valor_imovel: parseCurrency(newLead.valor_imovel),
-        cidade: newLead.cidade.trim(),
-        grupo_origem: newLead.grupo_origem.trim(),
-        informacoes_importantes: newLead.informacoes_importantes.trim() || null,
-        etapa: 'Roleta',
-        prioridade: newLead.prioridade || 'Baixa'
-      });
+      const { data, error } = await supabase
+        .from('leads')
+        .insert({
+          nome_cliente: parsed.nome_cliente.trim(),
+          cpf_cliente: parsed.cpf_cliente,
+          valor_imovel: parsed.valor_imovel,
+          cidade: parsed.cidade.trim(),
+          grupo_origem: parsed.grupo_origem.trim(),
+          informacoes_importantes: parsed.informacoes_importantes.trim() || null,
+          data_hora_entrada: parsed.data_hora_entrada,
+          etapa: 'Roleta',
+          prioridade: 'Baixa'
+        })
+        .select()
+        .single();
 
       if (error) throw error;
 
       showToast('Lead cadastrado com sucesso!', 'success');
       setShowAddModal(false);
-      setNewLead({
-        nome_cliente: '',
-        cpf_cliente: '',
-        valor_imovel: '',
-        cidade: '',
-        grupo_origem: '',
-        informacoes_importantes: '',
-        prioridade: 'Baixa'
-      });
+      setRawText('');
       fetchLeads();
-    } catch (err: any) {
-      showToast(err.message || 'Erro ao cadastrar lead.', 'error');
+      if (data) {
+        handleCardClick(data);
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao cadastrar lead.', 'error');
     }
   };
 
   // State Transition Constraints Check
-  const checkTransitionAllowed = (_current: string, _target: string): { allowed: boolean; reason?: string } => {
+  const checkTransitionAllowed = (current: string, target: string): { allowed: boolean; reason?: string } => {
+    if (current && target) {
+      return { allowed: true };
+    }
     return { allowed: true };
   };
 
@@ -506,8 +501,8 @@ function App() {
       
       showToast(`Lead atualizado com sucesso para ${etapa}!`, 'success');
       fetchLeads();
-    } catch (err: any) {
-      showToast(err.message || 'Erro ao atualizar status do lead.', 'error');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao atualizar status do lead.', 'error');
     }
   };
 
@@ -647,7 +642,7 @@ function App() {
     if (!validateEditForm()) return;
 
     try {
-      const updateData: any = {};
+      const updateData: Record<string, unknown> = {};
 
       // Always update priority
       updateData.prioridade = editForm.prioridade || 'Baixa';
@@ -693,11 +688,11 @@ function App() {
 
       if (error) throw error;
 
-      showToast('Lead atualizado com sucesso!', 'success');
+      showToast('Lead updated successfully!', 'success');
       setSelectedLead(null);
       fetchLeads();
-    } catch (err: any) {
-      showToast(err.message || 'Erro ao atualizar lead.', 'error');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao atualizar lead.', 'error');
     }
   };
 
@@ -736,8 +731,8 @@ function App() {
       showToast('Pasta adicionada ao CorPay com sucesso!', 'success');
       setSelectedLead(null);
       fetchLeads();
-    } catch (err: any) {
-      showToast(err.message || 'Erro ao adicionar pasta ao CorPay.', 'error');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao adicionar pasta ao CorPay.', 'error');
     }
   };
 
@@ -1286,123 +1281,38 @@ function App() {
           <div className="modal">
             <div className="modal-header">
               <h2 className="modal-title">Cadastrar Novo Lead</h2>
-              <button className="modal-close" onClick={() => setShowAddModal(false)}>
+              <button className="modal-close" onClick={() => { setShowAddModal(false); setRawText(''); setAddFormErrors({}); }}>
                 <FiX size={20} />
               </button>
             </div>
             <form onSubmit={handleAddLeadSubmit}>
               <div className="modal-body">
-                {/* Informações do Cliente */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
-                  <FiUsers style={{ color: 'var(--color-primary)' }} />
-                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Informações do Cliente</span>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="nome_cliente">Nome do Cliente *</label>
-                  <input 
-                    type="text" 
-                    id="nome_cliente"
-                    className="form-control" 
-                    placeholder="Nome completo do proponente"
-                    value={newLead.nome_cliente}
-                    onChange={(e) => setNewLead(prev => ({ ...prev, nome_cliente: e.target.value }))}
-                  />
-                  {addFormErrors.nome_cliente && <span className="form-error">{addFormErrors.nome_cliente}</span>}
-                </div>
-
-                <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label htmlFor="cpf_cliente">CPF do Cliente *</label>
-                  <input 
-                    type="text" 
-                    id="cpf_cliente"
-                    className="form-control" 
-                    placeholder="000.000.000-00"
-                    value={newLead.cpf_cliente}
-                    onChange={(e) => setNewLead(prev => ({ ...prev, cpf_cliente: formatCPF(e.target.value) }))}
-                  />
-                  {addFormErrors.cpf_cliente && <span className="form-error">{addFormErrors.cpf_cliente}</span>}
-                </div>
-
-                {/* Informações do Imóvel */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', marginTop: '8px' }}>
-                  <FiHome style={{ color: 'var(--color-primary)' }} />
-                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Informações do Imóvel</span>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="valor_imovel">Valor do Imóvel *</label>
-                  <input 
-                    type="text" 
-                    id="valor_imovel"
-                    className="form-control" 
-                    placeholder="R$ 0,00"
-                    value={newLead.valor_imovel}
-                    onChange={(e) => setNewLead(prev => ({ ...prev, valor_imovel: formatCurrency(e.target.value) }))}
-                  />
-                  {addFormErrors.valor_imovel && <span className="form-error">{addFormErrors.valor_imovel}</span>}
-                </div>
-
-                <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label htmlFor="cidade">Cidade *</label>
-                  <input 
-                    type="text" 
-                    id="cidade"
-                    className="form-control" 
-                    placeholder="Ex: São Paulo"
-                    value={newLead.cidade}
-                    onChange={(e) => setNewLead(prev => ({ ...prev, cidade: e.target.value }))}
-                  />
-                  {addFormErrors.cidade && <span className="form-error">{addFormErrors.cidade}</span>}
-                </div>
-
-                {/* Origem e Observações */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', marginTop: '8px' }}>
                   <FiFileText style={{ color: 'var(--color-primary)' }} />
-                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Origem e Observações</span>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Criação Rápida via Texto
+                  </span>
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="grupo_origem">Grupo de Origem (WhatsApp/Canal) *</label>
-                  <input 
-                    type="text" 
-                    id="grupo_origem"
-                    className="form-control" 
-                    placeholder="Ex: WhatsApp ITAU SP"
-                    value={newLead.grupo_origem}
-                    onChange={(e) => setNewLead(prev => ({ ...prev, grupo_origem: e.target.value }))}
-                  />
-                  {addFormErrors.grupo_origem && <span className="form-error">{addFormErrors.grupo_origem}</span>}
-                </div>
-
-                <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label htmlFor="prioridade">Prioridade *</label>
-                  <select 
-                    id="prioridade"
-                    className="form-control"
-                    value={newLead.prioridade || 'Baixa'}
-                    onChange={(e) => setNewLead(prev => ({ ...prev, prioridade: e.target.value as any }))}
-                  >
-                    <option value="Baixa">Baixa</option>
-                    <option value="Média">Média</option>
-                    <option value="Alta">Alta</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="informacoes_importantes">Informações Importantes (Notas)</label>
+                  <label htmlFor="raw_text">Bloco de Texto do Lead *</label>
                   <textarea 
-                    id="informacoes_importantes"
+                    id="raw_text"
                     className="form-control" 
-                    rows={3}
-                    placeholder="Observações ou notas relevantes de triagem..."
-                    value={newLead.informacoes_importantes}
-                    onChange={(e) => setNewLead(prev => ({ ...prev, informacoes_importantes: e.target.value }))}
+                    rows={12}
+                    placeholder="Cole aqui o texto contendo as informações do lead (ex: mensagem do WhatsApp)..."
+                    value={rawText}
+                    onChange={(e) => setRawText(e.target.value)}
+                    style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}
                   />
+                  {addFormErrors.raw_text && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.raw_text}</span>}
+                  {addFormErrors.nome_cliente && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.nome_cliente}</span>}
+                  {addFormErrors.cpf_cliente && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.cpf_cliente}</span>}
+                  {addFormErrors.valor_imovel && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.valor_imovel}</span>}
                 </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>Cancelar</button>
+                <button type="button" className="btn btn-secondary" onClick={() => { setShowAddModal(false); setRawText(''); setAddFormErrors({}); }}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Cadastrar</button>
               </div>
             </form>
@@ -1522,7 +1432,7 @@ function App() {
                     id="edit_prioridade"
                     className="form-control"
                     value={editForm.prioridade || 'Baixa'}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, prioridade: e.target.value as any }))}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, prioridade: e.target.value as 'Baixa' | 'Média' | 'Alta' }))}
                   >
                     <option value="Baixa">Baixa</option>
                     <option value="Média">Média</option>
@@ -1598,7 +1508,7 @@ function App() {
                       <FiFileText style={{ color: 'var(--color-primary)' }} />
                       <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Origem e Observações</span>
                     </div>
-                    
+
                     <div className="form-group">
                       <label htmlFor="edit_grupo_origem">Grupo de Origem (WhatsApp/Canal) *</label>
                       <input 
@@ -1667,7 +1577,7 @@ function App() {
                         <option value="Reprovado">Reprovado</option>
                         <option value="Segue Pendente de Documento">Segue Pendente de Documento</option>
                       </select>
-                      {editFormErrors.edit_resultado_analise && <span className="form-error">{editFormErrors.edit_resultado_analise}</span>}
+                      {editFormErrors.resultado_analise && <span className="form-error">{editFormErrors.resultado_analise}</span>}
                     </div>
 
                     {(editForm.resultado_analise === 'Condicionado' || 
