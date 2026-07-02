@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
-import { parseRawText } from './utils/parser';
+import { parseRawText, isValidCpf } from './utils/parser';
 import type { Session } from '@supabase/supabase-js';
 import { 
   FiPlus, 
@@ -18,7 +18,10 @@ import {
   FiTrendingUp,
   FiHelpCircle,
   FiHome,
-  FiFlag
+  FiFlag,
+  FiCheckSquare,
+  FiTrash2,
+  FiMinimize2
 } from 'react-icons/fi';
 
 interface Lead {
@@ -118,6 +121,126 @@ function App() {
   // Add Lead Form State
   const [rawText, setRawText] = useState('');
   const [addFormErrors, setAddFormErrors] = useState<Record<string, string>>({});
+  const [addLeadStep, setAddLeadStep] = useState<1 | 2>(1);
+  const [parsedLeadForm, setParsedLeadForm] = useState({
+    nome_cliente: '',
+    cpf_cliente: '',
+    valor_imovel: '',
+    cidade: '',
+    grupo_origem: '',
+    analista: '',
+    servico: 'AVALIAÇÃO',
+    notes: '',
+    data_hora_entrada: '',
+  });
+
+  // Sticky Notes (Pendências) Widget State
+  interface StickyNote {
+    id: string;
+    text: string;
+    completed: boolean;
+  }
+  const [showStickyNotes, setShowStickyNotes] = useState<boolean>(() => {
+    return localStorage.getItem('widget_pendencias_visible') === 'true';
+  });
+  const [stickyNotes, setStickyNotes] = useState<StickyNote[]>(() => {
+    try {
+      const saved = localStorage.getItem('widget_pendencias_items');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [stickyPosition, setStickyPosition] = useState<{ x: number; y: number }>(() => {
+    try {
+      const saved = localStorage.getItem('widget_pendencias_pos');
+      return saved ? JSON.parse(saved) : { x: window.innerWidth - 340, y: window.innerHeight - 450 };
+    } catch {
+      return { x: window.innerWidth - 340, y: window.innerHeight - 450 };
+    }
+  });
+  const [isStickyMinimized, setIsStickyMinimized] = useState<boolean>(() => {
+    return localStorage.getItem('widget_pendencias_minimized') === 'true';
+  });
+  const [newStickyText, setNewStickyText] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  // Sync to LocalStorage
+  useEffect(() => {
+    localStorage.setItem('widget_pendencias_visible', String(showStickyNotes));
+  }, [showStickyNotes]);
+
+  useEffect(() => {
+    localStorage.setItem('widget_pendencias_items', JSON.stringify(stickyNotes));
+  }, [stickyNotes]);
+
+  useEffect(() => {
+    localStorage.setItem('widget_pendencias_pos', JSON.stringify(stickyPosition));
+  }, [stickyPosition]);
+
+  useEffect(() => {
+    localStorage.setItem('widget_pendencias_minimized', String(isStickyMinimized));
+  }, [isStickyMinimized]);
+
+  // Drag and Drop mouse move listener
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newX = e.clientX - dragOffset.x;
+      const newY = e.clientY - dragOffset.y;
+      
+      // Clamp boundaries so it doesn't go offscreen
+      const clampedX = Math.max(0, Math.min(window.innerWidth - 320, newX));
+      const clampedY = Math.max(0, Math.min(window.innerHeight - 400, newY));
+      
+      setStickyPosition({ x: clampedX, y: clampedY });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, dragOffset]);
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('input')) return;
+    setIsDragging(true);
+    setDragOffset({
+      x: e.clientX - stickyPosition.x,
+      y: e.clientY - stickyPosition.y,
+    });
+    e.preventDefault();
+  };
+
+  const handleAddStickyNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newStickyText.trim()) return;
+    const newNote = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+      text: newStickyText.trim(),
+      completed: false
+    };
+    setStickyNotes(prev => [...prev, newNote]);
+    setNewStickyText('');
+  };
+
+  const toggleStickyNote = (id: string) => {
+    setStickyNotes(prev => prev.map(note => 
+      note.id === id ? { ...note, completed: !note.completed } : note
+    ));
+  };
+
+  const deleteStickyNote = (id: string) => {
+    setStickyNotes(prev => prev.filter(note => note.id !== id));
+  };
 
   // Transition Modal Form State
   const [transitionForm, setTransitionForm] = useState({
@@ -373,43 +496,106 @@ function App() {
     return parseFloat(digits) / 100;
   };
 
+  const handleCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatCPF(e.target.value);
+    setParsedLeadForm(prev => ({ ...prev, cpf_cliente: formatted }));
+  };
+
+  const handleValorChange = (valStr: string) => {
+    const formatted = formatCurrency(valStr);
+    setParsedLeadForm(prev => ({ ...prev, valor_imovel: formatted }));
+  };
+
   const handleAddLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddFormErrors({});
 
-    const errors: Record<string, string> = {};
-    if (!rawText.trim()) {
-      errors.raw_text = 'O texto do lead é obrigatório.';
-      setAddFormErrors(errors);
+    if (addLeadStep === 1) {
+      if (!rawText.trim()) {
+        setAddFormErrors({ raw_text: 'O texto do lead é obrigatório.' });
+        return;
+      }
+
+      const parsed = parseRawText(rawText);
+
+      // Populate parsed lead form state
+      setParsedLeadForm({
+        nome_cliente: parsed.nome_cliente || '',
+        cpf_cliente: parsed.cpf_cliente || '',
+        valor_imovel: parsed.valor_imovel ? formatCurrency(String(parsed.valor_imovel * 100)) : '',
+        cidade: parsed.cidade || 'Não Informada',
+        grupo_origem: parsed.grupo_origem || 'WhatsApp',
+        analista: parsed.analista || '',
+        servico: parsed.servico || 'AVALIAÇÃO',
+        notes: parsed.notes || '',
+        data_hora_entrada: parsed.data_hora_entrada,
+      });
+
+      // Go to step 2 directly (even if fields are missing or invalid)
+      setAddLeadStep(2);
       return;
     }
 
-    const parsed = parseRawText(rawText);
+    // Step 2: Final submission validation
+    const errors: Record<string, string> = {};
+    
+    if (!parsedLeadForm.nome_cliente.trim()) {
+      errors.nome_cliente = 'Nome do cliente é obrigatório.';
+    }
+    
+    const rawCpf = parsedLeadForm.cpf_cliente.replace(/\D/g, '');
+    if (!rawCpf) {
+      errors.cpf_cliente = 'CPF do cliente é obrigatório.';
+    } else if (rawCpf.length !== 11) {
+      errors.cpf_cliente = 'CPF deve conter 11 dígitos.';
+    } else if (!isValidCpf(rawCpf)) {
+      errors.cpf_cliente = 'CPF inválido (checksum falhou).';
+    }
 
-    if (!parsed.nome_cliente) {
-      errors.nome_cliente = 'Nome do cliente não pôde ser extraído do texto.';
+    const numericValor = parseFloat(parsedLeadForm.valor_imovel.replace(/\D/g, '')) / 100 || 0;
+    if (numericValor <= 0) {
+      errors.valor_imovel = 'Valor do imóvel é obrigatório e deve ser maior que zero.';
     }
-    if (!parsed.cpf_cliente) {
-      errors.cpf_cliente = 'CPF do cliente não pôde ser extraído ou é inválido.';
+
+    if (!parsedLeadForm.cidade.trim()) {
+      errors.cidade = 'Cidade / Localização é obrigatória.';
     }
-    if (parsed.valor_imovel <= 0) {
-      errors.valor_imovel = 'Valor do imóvel não pôde ser extraído ou é inválido.';
+
+    if (!parsedLeadForm.grupo_origem.trim()) {
+      errors.grupo_origem = 'Grupo de Origem é obrigatório.';
     }
 
     setAddFormErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
+    // Compile Analyst, Service and Notes into informacoes_importantes
+    const infoParts: string[] = [];
+    if (parsedLeadForm.analista.trim()) {
+      let analystHandle = parsedLeadForm.analista.trim();
+      if (!analystHandle.startsWith('@')) {
+        analystHandle = `@${analystHandle}`;
+      }
+      infoParts.push(`Analista: ${analystHandle}`);
+    }
+    if (parsedLeadForm.servico.trim()) {
+      infoParts.push(`Serviço: ${parsedLeadForm.servico.trim()}`);
+    }
+    if (parsedLeadForm.notes.trim()) {
+      infoParts.push(`Notas: ${parsedLeadForm.notes.trim()}`);
+    }
+    const compiledInfo = infoParts.join("\n");
+
     try {
       const { data, error } = await supabase
         .from('leads')
         .insert({
-          nome_cliente: parsed.nome_cliente.trim(),
-          cpf_cliente: parsed.cpf_cliente,
-          valor_imovel: parsed.valor_imovel,
-          cidade: parsed.cidade.trim(),
-          grupo_origem: parsed.grupo_origem.trim(),
-          informacoes_importantes: parsed.informacoes_importantes.trim() || null,
-          data_hora_entrada: parsed.data_hora_entrada,
+          nome_cliente: parsedLeadForm.nome_cliente.trim(),
+          cpf_cliente: parsedLeadForm.cpf_cliente,
+          valor_imovel: numericValor,
+          cidade: parsedLeadForm.cidade.trim(),
+          grupo_origem: parsedLeadForm.grupo_origem.trim(),
+          informacoes_importantes: compiledInfo.trim() || null,
+          data_hora_entrada: parsedLeadForm.data_hora_entrada || new Date().toISOString(),
           etapa: 'Roleta',
           prioridade: 'Baixa'
         })
@@ -421,6 +607,7 @@ function App() {
       showToast('Lead cadastrado com sucesso!', 'success');
       setShowAddModal(false);
       setRawText('');
+      setAddLeadStep(1);
       fetchLeads();
       if (data) {
         handleCardClick(data);
@@ -688,7 +875,7 @@ function App() {
 
       if (error) throw error;
 
-      showToast('Lead updated successfully!', 'success');
+      showToast('Lead atualizado com sucesso!', 'success');
       setSelectedLead(null);
       fetchLeads();
     } catch (err) {
@@ -998,6 +1185,46 @@ function App() {
           CADASTRAR LEAD
         </button>
 
+        <button 
+          className="btn-new-lead" 
+          onClick={() => setShowStickyNotes(prev => !prev)}
+          style={{ 
+            backgroundColor: showStickyNotes ? 'var(--color-primary)' : 'rgba(99, 102, 241, 0.05)', 
+            color: showStickyNotes ? 'white' : 'var(--color-text-dark)', 
+            border: showStickyNotes ? 'none' : '1px solid var(--color-border)',
+            marginTop: '-12px',
+            marginBottom: '16px',
+            boxShadow: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            justifyContent: 'flex-start'
+          }}
+        >
+          <FiCheckSquare size={18} />
+          <span>PENDÊNCIAS</span>
+          {stickyNotes.filter(n => !n.completed).length > 0 && (
+            <span 
+              style={{
+                backgroundColor: showStickyNotes ? 'white' : '#ef4444',
+                color: showStickyNotes ? 'var(--color-primary)' : 'white',
+                fontSize: '0.7rem',
+                fontWeight: 700,
+                borderRadius: '9999px',
+                padding: '2px 6px',
+                marginLeft: 'auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minWidth: '16px',
+                height: '16px'
+              }}
+            >
+              {stickyNotes.filter(n => !n.completed).length}
+            </span>
+          )}
+        </button>
+
         <div className="sidebar-nav">
           <button 
             className={`nav-item ${currentTab === 'kanban' ? 'active' : ''}`}
@@ -1278,42 +1505,212 @@ function App() {
       {/* Modal: Add Lead */}
       {showAddModal && (
         <div className="modal-overlay">
-          <div className="modal">
+          <div className="modal" style={{ width: addLeadStep === 2 ? '650px' : '500px', maxWidth: '95%' }}>
             <div className="modal-header">
-              <h2 className="modal-title">Cadastrar Novo Lead</h2>
-              <button className="modal-close" onClick={() => { setShowAddModal(false); setRawText(''); setAddFormErrors({}); }}>
+              <h2 className="modal-title">
+                {addLeadStep === 1 ? 'Cadastrar Novo Lead' : 'Revisar e Confirmar Lead'}
+              </h2>
+              <button 
+                className="modal-close" 
+                onClick={() => { 
+                  setShowAddModal(false); 
+                  setRawText(''); 
+                  setAddFormErrors({}); 
+                  setAddLeadStep(1);
+                }}
+              >
                 <FiX size={20} />
               </button>
             </div>
             <form onSubmit={handleAddLeadSubmit}>
-              <div className="modal-body">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
-                  <FiFileText style={{ color: 'var(--color-primary)' }} />
-                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                    Criação Rápida via Texto
-                  </span>
-                </div>
+              <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto', padding: '20px 24px' }}>
+                {addLeadStep === 1 ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
+                      <FiFileText style={{ color: 'var(--color-primary)' }} />
+                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Criação Rápida via Texto
+                      </span>
+                    </div>
 
-                <div className="form-group">
-                  <label htmlFor="raw_text">Bloco de Texto do Lead *</label>
-                  <textarea 
-                    id="raw_text"
-                    className="form-control" 
-                    rows={12}
-                    placeholder="Cole aqui o texto contendo as informações do lead (ex: mensagem do WhatsApp)..."
-                    value={rawText}
-                    onChange={(e) => setRawText(e.target.value)}
-                    style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}
-                  />
-                  {addFormErrors.raw_text && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.raw_text}</span>}
-                  {addFormErrors.nome_cliente && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.nome_cliente}</span>}
-                  {addFormErrors.cpf_cliente && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.cpf_cliente}</span>}
-                  {addFormErrors.valor_imovel && <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>{addFormErrors.valor_imovel}</span>}
-                </div>
+                    <div className="form-group">
+                      <label htmlFor="raw_text">Bloco de Texto do Lead *</label>
+                      <textarea 
+                        id="raw_text"
+                        className="form-control" 
+                        rows={12}
+                        placeholder="Cole aqui o texto contendo as informações do lead (ex: mensagem do WhatsApp)..."
+                        value={rawText}
+                        onChange={(e) => setRawText(e.target.value)}
+                        style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}
+                      />
+                      {addFormErrors.raw_text && (
+                        <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>
+                          {addFormErrors.raw_text}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* Section 1: Client Info */}
+                    <div>
+                      <h3 style={{ fontSize: '0.85rem', color: 'var(--color-primary)', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Informações do Cliente
+                      </h3>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                        <div className="form-group">
+                          <label htmlFor="nome_cliente" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Nome do Cliente *</label>
+                          <input 
+                            type="text" 
+                            id="nome_cliente"
+                            className="form-control"
+                            style={addFormErrors.nome_cliente ? { borderColor: '#ef4444' } : {}}
+                            value={parsedLeadForm.nome_cliente} 
+                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, nome_cliente: e.target.value }))}
+                          />
+                          {addFormErrors.nome_cliente && <span className="form-error">{addFormErrors.nome_cliente}</span>}
+                        </div>
+                        <div className="form-group">
+                          <label htmlFor="cpf_cliente" style={{ fontWeight: 600, fontSize: '0.85rem' }}>CPF do Cliente *</label>
+                          <input 
+                            type="text" 
+                            id="cpf_cliente"
+                            className="form-control"
+                            style={addFormErrors.cpf_cliente ? { borderColor: '#ef4444' } : {}}
+                            value={parsedLeadForm.cpf_cliente} 
+                            onChange={handleCpfChange}
+                            placeholder="000.000.000-00"
+                          />
+                          {addFormErrors.cpf_cliente && <span className="form-error">{addFormErrors.cpf_cliente}</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 2: Property Info */}
+                    <div>
+                      <h3 style={{ fontSize: '0.85rem', color: 'var(--color-primary)', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Informações do Imóvel
+                      </h3>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                        <div className="form-group">
+                          <label htmlFor="valor_imovel" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Valor do Imóvel *</label>
+                          <input 
+                            type="text" 
+                            id="valor_imovel"
+                            className="form-control"
+                            style={addFormErrors.valor_imovel ? { borderColor: '#ef4444' } : {}}
+                            value={parsedLeadForm.valor_imovel} 
+                            onChange={(e) => handleValorChange(e.target.value)}
+                            placeholder="R$ 0,00"
+                          />
+                          {addFormErrors.valor_imovel && <span className="form-error">{addFormErrors.valor_imovel}</span>}
+                        </div>
+                        <div className="form-group">
+                          <label htmlFor="cidade" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Cidade / Localização *</label>
+                          <input 
+                            type="text" 
+                            id="cidade"
+                            className="form-control"
+                            style={addFormErrors.cidade ? { borderColor: '#ef4444' } : {}}
+                            value={parsedLeadForm.cidade} 
+                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, cidade: e.target.value }))}
+                          />
+                          {addFormErrors.cidade && <span className="form-error">{addFormErrors.cidade}</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 3: Origin & Notes */}
+                    <div>
+                      <h3 style={{ fontSize: '0.85rem', color: 'var(--color-primary)', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Origem e Observações
+                      </h3>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '12px' }}>
+                        <div className="form-group">
+                          <label htmlFor="grupo_origem" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Grupo de Origem (WhatsApp/Canal) *</label>
+                          <input 
+                            type="text" 
+                            id="grupo_origem"
+                            className="form-control"
+                            style={addFormErrors.grupo_origem ? { borderColor: '#ef4444' } : {}}
+                            value={parsedLeadForm.grupo_origem} 
+                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, grupo_origem: e.target.value }))}
+                          />
+                          {addFormErrors.grupo_origem && <span className="form-error">{addFormErrors.grupo_origem}</span>}
+                        </div>
+                        <div className="form-group">
+                          <label htmlFor="analista" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Analista Responsável</label>
+                          <input 
+                            type="text" 
+                            id="analista"
+                            className="form-control"
+                            value={parsedLeadForm.analista} 
+                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, analista: e.target.value }))}
+                            placeholder="@NomeDoAnalista"
+                          />
+                        </div>
+                      </div>
+                      <div className="form-group" style={{ marginBottom: '12px' }}>
+                        <label htmlFor="servico" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Serviço / Modalidade</label>
+                        <select 
+                          id="servico"
+                          className="form-control"
+                          value={parsedLeadForm.servico}
+                          onChange={(e) => setParsedLeadForm(prev => ({ ...prev, servico: e.target.value }))}
+                          style={{ width: '100%', height: '42px' }}
+                        >
+                          <option value="AVALIAÇÃO">AVALIAÇÃO</option>
+                          <option value="REAVALIAÇÃO">REAVALIAÇÃO</option>
+                          <option value="NOVA AVALIAÇÃO">NOVA AVALIAÇÃO</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="notes" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Informações Importantes (Notas)</label>
+                        <textarea 
+                          id="notes"
+                          className="form-control" 
+                          rows={4}
+                          value={parsedLeadForm.notes}
+                          onChange={(e) => setParsedLeadForm(prev => ({ ...prev, notes: e.target.value }))}
+                          placeholder="Informações adicionais..."
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => { setShowAddModal(false); setRawText(''); setAddFormErrors({}); }}>Cancelar</button>
-                <button type="submit" className="btn btn-primary">Cadastrar</button>
+                {addLeadStep === 1 ? (
+                  <>
+                    <button 
+                      type="button" 
+                      className="btn btn-secondary" 
+                      onClick={() => { 
+                        setShowAddModal(false); 
+                        setRawText(''); 
+                        setAddFormErrors({}); 
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                    <button type="submit" className="btn btn-primary">Analisar e Avançar</button>
+                  </>
+                ) : (
+                  <>
+                    <button 
+                      type="button" 
+                      className="btn btn-secondary" 
+                      onClick={() => {
+                        setAddLeadStep(1);
+                        setAddFormErrors({});
+                      }}
+                    >
+                      Voltar
+                    </button>
+                    <button type="submit" className="btn btn-primary">Cadastrar</button>
+                  </>
+                )}
               </div>
             </form>
           </div>
@@ -1840,6 +2237,271 @@ function App() {
               </form>
             )}
           </div>
+        </div>
+      )}
+      {/* Widget Flutuante de Pendências (Sticky Notes) */}
+      {showStickyNotes && (
+        <div 
+          style={{
+            position: 'fixed',
+            left: `${stickyPosition.x}px`,
+            top: `${stickyPosition.y}px`,
+            zIndex: 9999,
+            width: isStickyMinimized ? 'auto' : '320px',
+            background: 'rgba(255, 255, 255, 0.8)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            borderRadius: isStickyMinimized ? '50%' : '14px',
+            boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.15)',
+            border: '1px solid rgba(255, 255, 255, 0.25)',
+            transition: isDragging ? 'none' : 'width 0.2s ease, border-radius 0.2s ease, box-shadow 0.2s ease',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            fontFamily: 'var(--font-sans)',
+            userSelect: isDragging ? 'none' : 'auto'
+          }}
+        >
+          {isStickyMinimized ? (
+            /* Minimized state - small pill */
+            <div 
+              onMouseDown={handleMouseDown}
+              onClick={() => setIsStickyMinimized(false)}
+              title="Clique para expandir pendências"
+              style={{
+                width: '60px',
+                height: '60px',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: isDragging ? 'grabbing' : 'pointer',
+                background: 'var(--color-primary)',
+                color: 'white',
+                position: 'relative',
+                transition: 'transform 0.2s ease',
+                boxShadow: '0 4px 12px rgba(99, 102, 241, 0.4)'
+              }}
+              className="minimized-sticky-note"
+            >
+              <FiCheckSquare size={24} />
+              {stickyNotes.filter(n => !n.completed).length > 0 && (
+                <span 
+                  style={{
+                    position: 'absolute',
+                    top: '-4px',
+                    right: '-4px',
+                    backgroundColor: '#ef4444',
+                    color: 'white',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    borderRadius: '50%',
+                    width: '20px',
+                    height: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '2px solid white',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                  }}
+                >
+                  {stickyNotes.filter(n => !n.completed).length}
+                </span>
+              )}
+            </div>
+          ) : (
+            /* Expanded state */
+            <>
+              {/* Header Handle */}
+              <div 
+                onMouseDown={handleMouseDown}
+                style={{
+                  padding: '12px 16px',
+                  background: 'rgba(99, 102, 241, 0.1)',
+                  borderBottom: '1px solid rgba(0, 0, 0, 0.05)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  userSelect: 'none'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <FiCheckSquare style={{ color: 'var(--color-primary)' }} />
+                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Pendências Rápidas
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button 
+                    type="button"
+                    onClick={() => setIsStickyMinimized(true)}
+                    title="Minimizar"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--color-text-muted)',
+                      padding: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '4px',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.05)'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <FiMinimize2 size={14} />
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => setShowStickyNotes(false)}
+                    title="Fechar"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--color-text-muted)',
+                      padding: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '4px',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <FiX size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div 
+                style={{
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                  maxHeight: '300px',
+                  overflowY: 'auto'
+                }}
+              >
+                {stickyNotes.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '24px 8px', color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>
+                    Nenhuma pendência anotada. Use o campo abaixo para criar uma nova.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {stickyNotes.map(note => (
+                      <div 
+                        key={note.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          padding: '8px 12px',
+                          background: note.completed ? 'rgba(0, 0, 0, 0.02)' : 'rgba(255, 255, 255, 0.5)',
+                          borderRadius: '8px',
+                          border: '1px solid rgba(0, 0, 0, 0.04)',
+                          transition: 'all 0.2s ease',
+                          opacity: note.completed ? 0.6 : 1
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flex: 1 }}>
+                          <input 
+                            type="checkbox"
+                            checked={note.completed}
+                            onChange={() => toggleStickyNote(note.id)}
+                            style={{ marginTop: '3px', cursor: 'pointer' }}
+                          />
+                          <span 
+                            style={{ 
+                              fontSize: '0.85rem', 
+                              color: 'var(--color-text-dark)', 
+                              textDecoration: note.completed ? 'line-through' : 'none',
+                              wordBreak: 'break-word',
+                              lineHeight: '1.4'
+                            }}
+                          >
+                            {note.text}
+                          </span>
+                        </div>
+                        <button 
+                          type="button"
+                          onClick={() => deleteStickyNote(note.id)}
+                          title="Excluir"
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: '#94a3b8',
+                            padding: '2px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderRadius: '4px',
+                            transition: 'color 0.2s'
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.color = '#ef4444'}
+                          onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                        >
+                          <FiTrash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Form to add notes */}
+              <form 
+                onSubmit={handleAddStickyNote}
+                style={{
+                  padding: '12px 16px',
+                  borderTop: '1px solid rgba(0, 0, 0, 0.05)',
+                  background: 'rgba(255, 255, 255, 0.4)',
+                  display: 'flex',
+                  gap: '8px'
+                }}
+              >
+                <input 
+                  type="text"
+                  placeholder="Nova pendência..."
+                  value={newStickyText}
+                  onChange={(e) => setNewStickyText(e.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--color-border)',
+                    outline: 'none',
+                    fontSize: '0.85rem',
+                    fontFamily: 'var(--font-sans)'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = 'var(--color-primary)'}
+                  onBlur={(e) => e.target.style.borderColor = 'var(--color-border)'}
+                />
+                <button 
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: 'none'
+                  }}
+                >
+                  <FiPlus size={16} />
+                </button>
+              </form>
+            </>
+          )}
         </div>
       )}
     </div>

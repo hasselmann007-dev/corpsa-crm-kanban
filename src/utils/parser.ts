@@ -6,6 +6,9 @@ export interface ParsedLead {
   grupo_origem: string;
   informacoes_importantes: string;
   data_hora_entrada: string;
+  analista?: string;
+  servico?: string;
+  notes?: string;
 }
 
 /**
@@ -41,88 +44,33 @@ function parseNomeCliente(text: string): string {
   const labelRegex = /^[ \t]*(?:Nome(?:[\s_]+do[\s_]+Cliente)?|Cliente)[ \t]*:[ \t]*(.+)$/im;
   const labelMatch = text.match(labelRegex);
   if (labelMatch) {
-    const lineAfterLabel = labelMatch[1];
+    const lineAfterLabel = labelMatch[1].trim();
     const regex = /\b[\p{Lu}'-]{2,}\b/gu;
     const matches = Array.from(lineAfterLabel.matchAll(regex)).map(m => m[0]);
-    const nameChains: string[][] = [];
-    let currentChain: string[] = [];
-
-    for (const word of matches) {
-      const normalizedWord = word
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/['-]/g, "")
-        .toUpperCase();
-
-      if (keywords.has(normalizedWord)) {
-        if (currentChain.length > 0) {
-          nameChains.push(currentChain);
-          currentChain = [];
-        }
-      } else {
-        currentChain.push(word);
-      }
-    }
-    if (currentChain.length > 0) {
-      nameChains.push(currentChain);
-    }
-
-    const candidate = nameChains.find(chain => chain.length >= 2) || nameChains.find(chain => chain.length >= 1);
-    if (candidate) {
-      return candidate.join(' ');
+    const filtered = matches.filter(word => !keywords.has(word.toUpperCase()));
+    if (filtered.length > 0) {
+      return filtered.join(' ');
     }
   }
 
-  // 2. Fallback: Search the entire text line by line, ignoring known headers and filtering keywords
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    const normalizedLine = line
-      .trim()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toUpperCase()
-      .replace(/^[:\s\-*•>#]+/, "")
-      .replace(/[:\s\-*•<#]+$/, "")
-      .trim();
-
-    if (knownHeaders.has(normalizedLine)) {
-      continue;
-    }
-
-    const regex = /\b[\p{Lu}'-]{2,}\b/gu;
-    const matches = Array.from(line.matchAll(regex)).map(m => m[0]);
-    const nameChains: string[][] = [];
-    let currentChain: string[] = [];
-
-    for (const word of matches) {
-      const normalizedWord = word
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/['-]/g, "")
-        .toUpperCase();
-
-      if (keywords.has(normalizedWord)) {
-        if (currentChain.length > 0) {
-          nameChains.push(currentChain);
-          currentChain = [];
-        }
-      } else {
-        currentChain.push(word);
-      }
-    }
-    if (currentChain.length > 0) {
-      nameChains.push(currentChain);
-    }
-
-    const candidates = nameChains.filter(chain => {
-      const candidateStr = chain.join(' ');
-      const normCandidate = candidateStr.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
-      return !knownHeaders.has(normCandidate);
+  // 2. Fallback: Search the entire text for name sequences (2+ uppercase words separated by spaces/prepositions)
+  // We allow the sequence to be preceded/followed by digits or non-letters
+  const nameSeqRegex = /(?:^|[^a-zA-ZÀ-ÿ_])((\p{Lu}{2,})(?:[ \t]+(?:(?:de|da|do|dos|das|e|DE|DA|DO|DOS|DAS|E)[ \t]+)?(\p{Lu}{2,}))+)(?=$|[^a-zA-ZÀ-ÿ_])/gu;
+  const matches = Array.from(text.matchAll(nameSeqRegex)).map(m => m[1].trim());
+  if (matches.length > 0) {
+    const candidates = matches.filter(cand => {
+      const norm = cand.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      if (knownHeaders.has(norm)) return false;
+      // Ensure it doesn't consist entirely of keywords
+      const words = cand.split(/\s+/);
+      const nonKeywords = words.filter(w => !keywords.has(w.toUpperCase()));
+      return nonKeywords.length > 0;
     });
-
-    const candidate = candidates.find(chain => chain.length >= 2) || candidates.find(chain => chain.length >= 1);
-    if (candidate) {
-      return candidate.join(' ');
+    
+    if (candidates.length > 0) {
+      // Sort to pick the longest contiguous chain first
+      candidates.sort((a, b) => b.length - a.length);
+      return candidates[0];
     }
   }
 
@@ -132,7 +80,7 @@ function parseNomeCliente(text: string): string {
 /**
  * Checksum validation for Brazilian CPF.
  */
-function isValidCpf(cpf: string): boolean {
+export function isValidCpf(cpf: string): boolean {
   const digits = cpf.replace(/\D/g, "");
   if (digits.length !== 11) return false;
   if (/^(\d)\1{10}$/.test(digits)) return false;
@@ -316,7 +264,8 @@ function parseNotes(
   analistaOriginalText: string,
   servicoOriginalText: string,
   dateOriginalText: string,
-  grupoOrigem: string
+  grupoOrigem: string,
+  cidadeRawText: string
 ): string {
   const lines = text.split(/\r?\n/);
   const notesLines: string[] = [];
@@ -374,6 +323,9 @@ function parseNotes(
     if (grupoOrigem) {
       cleanedLine = replaceFullWord(cleanedLine, grupoOrigem, "");
     }
+    if (cidadeRawText) {
+      cleanedLine = replaceFullWord(cleanedLine, cidadeRawText, "");
+    }
 
     // Remove labels/prefixes
     for (const labelRegex of labelsToRemove) {
@@ -391,6 +343,16 @@ function parseNotes(
   return notesLines.join(" ");
 }
 
+function capitalizeWords(str: string): string {
+  return str
+    .split(/\s+/)
+    .map(word => {
+      if (!word) return "";
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
+
 /**
  * Main parser function to convert raw lead text to ParsedLead object.
  */
@@ -401,12 +363,70 @@ export function parseRawText(text: string): ParsedLead {
   const valorResult = parseValorImovel(text);
   const valor_imovel = valorResult.value;
   
-  const cidade = "Não Informada";
-  const grupo_origem = parseGrupoOrigem(text);
-
   const analistaResult = parseAnalista(text);
   const servicoResult = parseServico(text);
   const dateResult = parseDataHoraEntrada(text);
+
+  let cidade = "Não Informada";
+  let grupo_origem = "";
+  let cidadeRawText = "";
+  
+  // Segment-based parsing for Cidade and Grupo
+  const firstLine = text.split(/\r?\n/).find(l => l.trim().length > 0) || "";
+  if (firstLine.includes("-")) {
+    const segments = firstLine.split("-").map(s => s.trim());
+    const candidates: string[] = [];
+    
+    for (const seg of segments) {
+      if (!seg) continue;
+      
+      // Classify and filter out known segment types:
+      // 1. Service / Date
+      const hasService = /AVALIA[CÇ]A[OÕ]/i.test(seg);
+      const hasDate = /\b\d{1,2}\/\d{1,2}\b/.test(seg);
+      if (hasService || hasDate) continue;
+      
+      // 2. Value
+      const hasValue = /\b\d+(?:[.,]\d+)?\s*[kKMm]\b/.test(seg);
+      if (hasValue) continue;
+      
+      // 3. CPF (valid checksum check)
+      const cleanDigits = seg.replace(/\D/g, "");
+      const hasCpf = cleanDigits.length === 11 && isValidCpf(cleanDigits);
+      if (hasCpf) continue;
+      
+      // 4. Analyst Handle
+      const hasAnalyst = seg.includes("@");
+      if (hasAnalyst) continue;
+      
+      // 5. Client Name
+      const cleanNome = nome_cliente.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      const cleanSeg = seg.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      if (cleanNome && cleanSeg.includes(cleanNome)) continue;
+      
+      // 6. Financing
+      const isFinancing = /^(SBPE|MCMV)$/i.test(seg);
+      if (isFinancing) continue;
+      
+      // 7. Agency / FID
+      const isAgency = /\bag\s*\d+\b/i.test(seg) || /\bFID\s*\d+/i.test(seg);
+      if (isAgency) continue;
+      
+      candidates.push(seg);
+    }
+    
+    if (candidates.length > 0) {
+      grupo_origem = candidates[0];
+      if (candidates.length > 1) {
+        cidadeRawText = candidates[1];
+        cidade = capitalizeWords(cidadeRawText);
+      }
+    }
+  }
+  
+  if (!grupo_origem) {
+    grupo_origem = parseGrupoOrigem(text);
+  }
 
   const notes = parseNotes(
     text,
@@ -416,8 +436,11 @@ export function parseRawText(text: string): ParsedLead {
     analistaResult ? analistaResult.originalText : "",
     servicoResult ? servicoResult.originalText : "",
     dateResult.raw,
-    grupo_origem
+    grupo_origem,
+    cidadeRawText
   );
+
+
 
   // Format informacoes_importantes
   const infoParts: string[] = [];
@@ -440,5 +463,8 @@ export function parseRawText(text: string): ParsedLead {
     grupo_origem,
     informacoes_importantes,
     data_hora_entrada: dateResult.isoString,
+    analista: analistaResult ? analistaResult.handle : "",
+    servico: servicoResult ? servicoResult.servico : "AVALIAÇÃO",
+    notes: notes,
   };
 }

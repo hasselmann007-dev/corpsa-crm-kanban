@@ -193,6 +193,36 @@ Notas: CLIENTE ELIGIVEL`;
     console.log("Test Case 7 passed!");
   }
 
+  // -------------------------------------------------------------
+  // Test Case 8: Natural Language Input (hyphen-separated)
+  // -------------------------------------------------------------
+  {
+    console.log("\nRunning Test Case 8: Natural Language Input");
+    const rawText8 = `AVALIAÇÃO 26/05  - DIRECIONAL - jardim botanico - 393k Av. - ag 2949 - FID 694060PAOLA DE ANDRADE GOMES DA CUNHA 05855465683(@Danilo Hasselmann ) GERENTE PAULO - SBPE`;
+
+    const parsed = parseRawText(rawText8);
+    console.log("Parsed result:", parsed);
+
+    assert.strictEqual(parsed.nome_cliente, "PAOLA DE ANDRADE GOMES DA CUNHA");
+    assert.strictEqual(parsed.cpf_cliente, "058.554.656-83");
+    assert.strictEqual(parsed.valor_imovel, 393000);
+    assert.strictEqual(parsed.cidade, "Jardim Botanico");
+    assert.strictEqual(parsed.grupo_origem, "DIRECIONAL");
+    
+    // Notes verification: analyst and service must be extracted, remaining in notes
+    assert.ok(parsed.informacoes_importantes.includes("Analista: @Danilo Hasselmann"));
+    assert.ok(parsed.informacoes_importantes.includes("Serviço: AVALIAÇÃO"));
+    assert.ok(parsed.informacoes_importantes.includes("Notas:"));
+    
+    // Cleaned remaining notes should contain key unparsed tags
+    assert.ok(parsed.informacoes_importantes.includes("ag 2949"));
+    assert.ok(parsed.informacoes_importantes.includes("FID 694060"));
+    assert.ok(parsed.informacoes_importantes.includes("GERENTE PAULO"));
+    assert.ok(parsed.informacoes_importantes.includes("SBPE"));
+    
+    console.log("Test Case 8 passed!");
+  }
+
   console.log("\nAll tests completed successfully!");
 }
 
