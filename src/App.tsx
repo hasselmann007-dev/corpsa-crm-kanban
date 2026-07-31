@@ -1277,10 +1277,41 @@ function App() {
           <button 
             className={`nav-item ${currentTab === 'apuracao_renda' ? 'active' : ''}`}
             onClick={() => setCurrentTab('apuracao_renda')}
-            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}
+            style={{ 
+              background: currentTab === 'apuracao_renda' ? 'var(--color-primary)' : 'rgba(99, 102, 241, 0.08)',
+              color: currentTab === 'apuracao_renda' ? 'white' : 'var(--color-primary)',
+              border: currentTab === 'apuracao_renda' ? 'none' : '1px solid rgba(99, 102, 241, 0.25)',
+              width: '100%', 
+              textAlign: 'left',
+              fontWeight: 700,
+              padding: '12px 14px',
+              borderRadius: '10px',
+              marginBottom: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              boxShadow: currentTab === 'apuracao_renda' ? '0 4px 12px rgba(99, 102, 241, 0.25)' : 'none',
+              transition: 'all 0.2s ease',
+              cursor: 'pointer'
+            }}
           >
-            <FiFileText size={18} />
-            Apuração de Renda
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <FiFileText size={18} />
+              <span>Apuração de Renda</span>
+            </div>
+            <span 
+              style={{
+                backgroundColor: currentTab === 'apuracao_renda' ? 'white' : '#10b981',
+                color: currentTab === 'apuracao_renda' ? 'var(--color-primary)' : 'white',
+                fontSize: '0.65rem',
+                fontWeight: 800,
+                padding: '2px 6px',
+                borderRadius: '4px',
+                textTransform: 'uppercase'
+              }}
+            >
+              NOVO
+            </span>
           </button>
         </div>
 
