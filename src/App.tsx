@@ -139,6 +139,7 @@ function App() {
     id: string;
     text: string;
     completed: boolean;
+    createdAt?: string;
   }
   const [showStickyNotes, setShowStickyNotes] = useState<boolean>(() => {
     return localStorage.getItem('widget_pendencias_visible') === 'true';
@@ -226,7 +227,8 @@ function App() {
     const newNote = {
       id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
       text: newStickyText.trim(),
-      completed: false
+      completed: false,
+      createdAt: new Date().toISOString()
     };
     setStickyNotes(prev => [...prev, newNote]);
     setNewStickyText('');
@@ -390,6 +392,26 @@ function App() {
     } finally {
       setSignUpLoading(false);
     }
+  };
+
+  // SLA Helpers (2 horas limit)
+  const isSlaDelayed = (dataHoraEntrada: string, etapa: string): boolean => {
+    if (etapa === 'Conclusao') return false;
+    if (!dataHoraEntrada) return false;
+    const entryTime = new Date(dataHoraEntrada).getTime();
+    if (isNaN(entryTime)) return false;
+    const now = Date.now();
+    const diffInHours = (now - entryTime) / (1000 * 60 * 60);
+    return diffInHours >= 2;
+  };
+
+  const isStickySlaDelayed = (note: { completed: boolean; createdAt?: string }): boolean => {
+    if (note.completed) return false;
+    if (!note.createdAt) return false;
+    const createdTime = new Date(note.createdAt).getTime();
+    if (isNaN(createdTime)) return false;
+    const diffInHours = (Date.now() - createdTime) / (1000 * 60 * 60);
+    return diffInHours >= 2;
   };
 
   const handleLogout = async () => {
@@ -1423,12 +1445,13 @@ function App() {
                             <div 
                               key={lead.id} 
                               className="lead-card"
+                              style={isSlaDelayed(lead.data_hora_entrada, lead.etapa) ? { border: '1.5px solid #ef4444', boxShadow: '0 2px 8px rgba(239, 68, 68, 0.2)' } : {}}
                               draggable={true}
                               onDragStart={(e) => handleDragStart(e, lead)}
                               onClick={() => handleCardClick(lead)}
                             >
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                   <span className="card-bank">{lead.grupo_origem}</span>
                                   {lead.prioridade && (
                                     <span 
@@ -1437,6 +1460,26 @@ function App() {
                                     >
                                       <FiFlag size={10} />
                                       {lead.prioridade}
+                                    </span>
+                                  )}
+                                  {isSlaDelayed(lead.data_hora_entrada, lead.etapa) && (
+                                    <span 
+                                      className="priority-badge priority-alta"
+                                      style={{ 
+                                        backgroundColor: '#ef4444', 
+                                        color: 'white', 
+                                        fontWeight: 700,
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        padding: '2px 6px',
+                                        borderRadius: '4px',
+                                        fontSize: '0.65rem'
+                                      }}
+                                      title="Este lead está no sistema há mais de 2 horas (SLA Atrasada)"
+                                    >
+                                      <FiAlertCircle size={10} />
+                                      SLA Atrasada
                                     </span>
                                   )}
                                 </div>
@@ -2428,6 +2471,27 @@ function App() {
                             }}
                           >
                             {note.text}
+                            {isStickySlaDelayed(note) && (
+                              <span 
+                                style={{
+                                  backgroundColor: '#ef4444',
+                                  color: 'white',
+                                  fontSize: '0.65rem',
+                                  fontWeight: 700,
+                                  borderRadius: '4px',
+                                  padding: '1px 5px',
+                                  textTransform: 'uppercase',
+                                  marginLeft: '6px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '2px',
+                                  verticalAlign: 'middle'
+                                }}
+                                title="Criado há mais de 2 horas"
+                              >
+                                <FiAlertCircle size={9} /> SLA Atrasada
+                              </span>
+                            )}
                           </span>
                         </div>
                         <button 

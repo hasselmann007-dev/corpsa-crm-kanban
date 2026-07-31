@@ -1,36 +1,33 @@
-# Project: CORPSA CRM Quick Lead Creation
+# Project: CORPSA CRM 2-Hour SLA Tracking & Warning Indicators
 
 ## Architecture
-- **Parser Module (`src/utils/parser.ts`)**: Pure TypeScript logic to parse raw text block inputs. Decoupled from React/Supabase APIs to facilitate isolated testing.
-- **Frontend Integration (`src/App.tsx`)**: Replaces the manual form fields in the "Cadastrar Novo Lead" modal with a single quick-create text area. Invokes the parser on submission, inserts the parsed lead to Supabase, and re-renders the board, auto-opening the edit/details modal for the newly added card.
-- **Testing Script (`src/parseTest.ts`)**: Programmatic script that runs via Node/tsx to execute test cases for different text inputs, asserting parser accuracy.
+- **SLA Utilities (`src/utils/sla.ts`)**: Core pure helper functions to evaluate whether a date string/ISO timestamp has passed the 2-hour (120-minute) threshold, taking stage into account.
+- **Lead Card Component / Kanban Rendering (`src/App.tsx`)**: Renders lead cards on the Kanban board. Uses SLA helper to check `data_hora_entrada`. If > 2 hours and `etapa !== 'Conclusao'`, renders static red/amber `"SLA Atrasada"` badge and applies border highlight. If `etapa === 'Conclusao'`, freezes tracking / hides warning.
+- **Floating Pendências / Sticky Notes Component (`src/App.tsx`)**: Manages floating pending items stored in LocalStorage. Ensures each pending item has a `createdAt` ISO timestamp upon creation. Renders static `"SLA Atrasada"` badge next to items uncompleted after 2 hours.
+- **Automated Validation Script (`src/slaTest.ts` or expanded test script)**: Node/tsx test script verifying SLA logic for lead cards and pendências under various timestamps and stages.
 
 ## Code Layout
-- `src/utils/parser.ts`: Parsing engine logic.
-- `src/App.tsx`: Main Kanban board application, UI for quick lead creation, and modal rendering.
-- `src/parseTest.ts`: Automated test script validating the parser function.
+- `src/utils/sla.ts`: Pure SLA calculation logic and helpers.
+- `src/App.tsx`: Main React component containing Kanban cards and Floating Pendências.
+- `src/slaTest.ts`: Automated test script validating SLA rules.
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | Decompose & Setup | Initialize metadata, write plan.md, configure tests. | None | DONE |
-| 2 | Implement Parser | Create `src/utils/parser.ts` parsing raw text blocks. | M1 | PLANNED |
-| 3 | Automated Tests | Create `src/parseTest.ts` to programmatically validate the parser. | M2 | PLANNED |
-| 4 | UI Integration | Replace modal fields in `src/App.tsx` with textarea, call parser, insert into Supabase, refresh board, and open modal. | M2, M3 | PLANNED |
-| 5 | Verification & Audit | Run all test scripts, check UI compilation, run Challenger stress tests, and perform Forensic Auditor check. | M4 | PLANNED |
+| 1 | Exploration & Analysis | Explore codebase structure, `data_hora_entrada` usage, pendências LocalStorage handling, and existing build/test scripts. | None | IN_PROGRESS |
+| 2 | Lead Card SLA (R1) | Implement SLA calculation for leads. Display `"SLA Atrasada"` badge and border highlight when >2h and stage !== 'Conclusao'. Freeze/remove when moved to 'Conclusao'. | M1 | PLANNED |
+| 3 | Floating Pendências SLA (R2) | Add `createdAt` ISO timestamp to pending items in LocalStorage. Render `"SLA Atrasada"` badge for uncompleted items >2h old. | M1 | PLANNED |
+| 4 | Automated Verification (R3) | Create `src/slaTest.ts` (or update test runners) and ensure `npm run build` compiles without errors. | M2, M3 | PLANNED |
+| 5 | Review, Stress Test & Forensic Audit | Reviewers, Challengers, and Forensic Auditor verify solution, integrity, and test pass criteria. | M4 | PLANNED |
 
 ## Interface Contracts
-### `src/utils/parser.ts` ↔ Calling Code
+### `src/utils/sla.ts`
 ```typescript
-export interface ParsedLead {
-  nome_cliente: string;
-  cpf_cliente: string; // Formatted as 000.000.000-00
-  valor_imovel: number; // Float value (e.g. 250000.00)
-  cidade: string; // Will default to a placeholder (e.g. "Não Informado") or empty if not extracted, but database requires non-empty check.
-  grupo_origem: string; // WhatsApp/Channel name
-  informacoes_importantes: string; // Formatted "Analista: ... \nServiço: ... \nNotas: ..."
-  data_hora_entrada?: string; // ISO String (computed from DD/MM and current year 2026)
+export interface SLACheckResult {
+  isOverdue: boolean;
+  elapsedMinutes: number;
 }
 
-export function parseRawText(text: string): ParsedLead;
+export function isLeadSLAOverdue(dataHoraEntrada?: string | null, stage?: string): boolean;
+export function isPendenciaSLAOverdue(createdAt?: string | null): boolean;
 ```
