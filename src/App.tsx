@@ -23,7 +23,8 @@ import {
   FiFlag,
   FiCheckSquare,
   FiTrash2,
-  FiMinimize2
+  FiMinimize2,
+  FiClock
 } from 'react-icons/fi';
 
 interface Lead {
@@ -422,6 +423,35 @@ function App() {
 
   const isStickySlaDelayed = (note: { completed: boolean; createdAt?: string }): boolean => {
     return isPendenciaSLAOverdue(note.createdAt, note.completed);
+  };
+
+  const formatEntryTime = (dateStr?: string | null): string => {
+    if (!dateStr) return 'Sem data';
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const mins = String(date.getMinutes()).padStart(2, '0');
+    return `${day}/${month} às ${hours}:${mins}h`;
+  };
+
+  const handleDeleteLead = async (e: React.MouseEvent, leadId: string, clientName: string) => {
+    e.stopPropagation();
+    if (!window.confirm(`Tem certeza que deseja excluir o card de "${clientName || 'Lead'}"?`)) return;
+
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .eq('id', leadId);
+
+      if (error) throw error;
+      showToast('Lead excluído com sucesso!', 'success');
+      fetchLeads();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao excluir lead.', 'error');
+    }
   };
 
   const handleLogout = async () => {
@@ -1517,21 +1547,46 @@ function App() {
                                         borderRadius: '4px',
                                         fontSize: '0.65rem'
                                       }}
-                                      title="Este lead está no sistema há mais de 2 horas (SLA Atrasada)"
+                                      title="Este lead está na Roleta há mais de 2 horas (SLA Atrasada)"
                                     >
                                       <FiAlertCircle size={10} />
                                       SLA Atrasada
                                     </span>
                                   )}
                                 </div>
-                                {lead.etapa === 'Conclusao' && (
-                                  <FiCheckCircle style={{ color: 'var(--color-conclusao)' }} title="Processo concluído" />
-                                )}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  {lead.etapa === 'Conclusao' && (
+                                    <FiCheckCircle style={{ color: 'var(--color-conclusao)' }} title="Processo concluído" />
+                                  )}
+                                  <button 
+                                    type="button"
+                                    onClick={(e) => handleDeleteLead(e, lead.id, lead.nome_cliente)}
+                                    title="Excluir card de lead"
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      cursor: 'pointer',
+                                      color: '#94a3b8',
+                                      padding: '2px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      borderRadius: '4px',
+                                      transition: 'color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = '#ef4444'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                                  >
+                                    <FiTrash2 size={13} />
+                                  </button>
+                                </div>
                               </div>
                               <div className="card-title">{lead.nome_cliente}</div>
                               <div className="card-value">{formatCurrencyValue(lead.valor_imovel)}</div>
                               
                               <div className="card-details">
+                                <span style={{ color: '#475569', fontWeight: 500 }}>
+                                  <FiClock size={11} style={{ color: '#6366f1' }} /> Roleta: {formatEntryTime(lead.data_hora_entrada)}
+                                </span>
                                 <span><FiMapPin size={12} /> {lead.cidade}</span>
                                 <span><FiFileText size={12} /> CPF: {lead.cpf_cliente}</span>
                                 {lead.descricao_pendencia && (
