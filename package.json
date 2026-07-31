@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:parse": "tsx src/parseTest.ts",
+    "test:sla": "tsx src/slaTest.ts",
+    "test": "npm run test:parse && npm run test:sla"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

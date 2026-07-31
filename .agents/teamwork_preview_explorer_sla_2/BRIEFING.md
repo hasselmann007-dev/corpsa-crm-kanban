@@ -1,4 +1,4 @@
-# BRIEFING — 2026-07-31T14:48:30Z
+# BRIEFING — 2026-07-31T14:49:05Z
 
 ## Mission
 Investigate Floating Pendências (Sticky Notes / Pending items) implementation and design SLA Atrasada warning badge (Requirement R2) when items remain uncompleted > 2 hours (120 minutes).
@@ -16,15 +16,20 @@ Investigate Floating Pendências (Sticky Notes / Pending items) implementation a
 
 ## Current Parent
 - Conversation ID: ba8835ee-0eb7-4b31-8fa9-d3e455001c0e
-- Updated: 2026-07-31T14:48:30Z
+- Updated: 2026-07-31T14:49:05Z
 
 ## Investigation State
-- **Explored paths**: [TBD]
-- **Key findings**: [TBD]
-- **Unexplored areas**: [TBD]
+- **Explored paths**: `src/App.tsx`, `src/utils/parser.ts`
+- **Key findings**:
+  - LocalStorage key for items: `widget_pendencias_items`
+  - `StickyNote` interface includes optional `createdAt?: string`
+  - Instantiation in `handleAddStickyNote` adds `createdAt: new Date().toISOString()`
+  - Helper `isStickySlaDelayed` checks `diffInHours >= 2` and `!completed`
+  - Warning badge `"SLA Atrasada"` rendered next to overdue items in floating widget
+- **Unexplored areas**: None. Scope fully investigated.
 
 ## Key Decisions Made
-- Initial setup completed.
+- Completed read-only investigation and generated `analysis.md` and `handoff.md`.
 
 ## Artifact Index
 - ORIGINAL_REQUEST.md — Original request instructions

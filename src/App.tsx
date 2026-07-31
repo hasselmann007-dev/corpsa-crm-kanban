@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import { parseRawText, isValidCpf } from './utils/parser';
+import { isLeadSLAOverdue, isPendenciaSLAOverdue } from './utils/sla';
+import { ApuracaoRendaTab } from './components/ApuracaoRendaTab';
 import type { Session } from '@supabase/supabase-js';
 import { 
   FiPlus, 
@@ -54,7 +56,7 @@ const COLUMNS = [
 function App() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentTab, setCurrentTab] = useState<'kanban' | 'dashboard'>('kanban');
+  const [currentTab, setCurrentTab] = useState<'kanban' | 'dashboard' | 'apuracao_renda'>('kanban');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Authentication State
@@ -147,7 +149,12 @@ function App() {
   const [stickyNotes, setStickyNotes] = useState<StickyNote[]>(() => {
     try {
       const saved = localStorage.getItem('widget_pendencias_items');
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed: StickyNote[] = JSON.parse(saved);
+      return parsed.map(note => ({
+        ...note,
+        createdAt: note.createdAt || new Date().toISOString()
+      }));
     } catch {
       return [];
     }
@@ -155,9 +162,14 @@ function App() {
   const [stickyPosition, setStickyPosition] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = localStorage.getItem('widget_pendencias_pos');
-      return saved ? JSON.parse(saved) : { x: window.innerWidth - 340, y: window.innerHeight - 450 };
+      if (!saved) return { x: window.innerWidth - 320, y: 100 };
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+        return parsed;
+      }
+      return { x: window.innerWidth - 320, y: 100 };
     } catch {
-      return { x: window.innerWidth - 340, y: window.innerHeight - 450 };
+      return { x: window.innerWidth - 320, y: 100 };
     }
   });
   const [isStickyMinimized, setIsStickyMinimized] = useState<boolean>(() => {
@@ -394,24 +406,22 @@ function App() {
     }
   };
 
-  // SLA Helpers (2 horas limit)
-  const isSlaDelayed = (dataHoraEntrada: string, etapa: string): boolean => {
-    if (etapa === 'Conclusao') return false;
-    if (!dataHoraEntrada) return false;
-    const entryTime = new Date(dataHoraEntrada).getTime();
-    if (isNaN(entryTime)) return false;
-    const now = Date.now();
-    const diffInHours = (now - entryTime) / (1000 * 60 * 60);
-    return diffInHours >= 2;
+  // 60-second ticker interval to force periodic re-render for real-time SLA updating
+  const [, setSlaTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setSlaTick((t) => t + 1);
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // SLA Helpers (using src/utils/sla.ts logic)
+  const isSlaDelayed = (dataHoraEntrada?: string | null, etapa?: string): boolean => {
+    return isLeadSLAOverdue(dataHoraEntrada, etapa);
   };
 
   const isStickySlaDelayed = (note: { completed: boolean; createdAt?: string }): boolean => {
-    if (note.completed) return false;
-    if (!note.createdAt) return false;
-    const createdTime = new Date(note.createdAt).getTime();
-    if (isNaN(createdTime)) return false;
-    const diffInHours = (Date.now() - createdTime) / (1000 * 60 * 60);
-    return diffInHours >= 2;
+    return isPendenciaSLAOverdue(note.createdAt, note.completed);
   };
 
   const handleLogout = async () => {
@@ -1264,6 +1274,14 @@ function App() {
             <FiActivity size={18} />
             Dashboard / Métricas
           </button>
+          <button 
+            className={`nav-item ${currentTab === 'apuracao_renda' ? 'active' : ''}`}
+            onClick={() => setCurrentTab('apuracao_renda')}
+            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}
+          >
+            <FiFileText size={18} />
+            Apuração de Renda
+          </button>
         </div>
 
         <div className="sidebar-footer">
@@ -1409,6 +1427,8 @@ function App() {
                 </div>
               </div>
             </>
+          ) : currentTab === 'apuracao_renda' ? (
+            <ApuracaoRendaTab />
           ) : (
             // Kanban Flow View
             <>

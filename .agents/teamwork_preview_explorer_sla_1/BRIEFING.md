@@ -17,16 +17,27 @@ Investigate Lead Card SLA tracking implementation in corpsa-crm-kanban project a
 
 ## Current Parent
 - Conversation ID: ba8835ee-0eb7-4b31-8fa9-d3e455001c0e
-- Updated: 2026-07-31T14:48:29Z
+- Updated: 2026-07-31T14:49:30Z
 
 ## Investigation State
-- **Explored paths**: None yet
-- **Key findings**: None yet
-- **Unexplored areas**: src/App.tsx, components, data types
+- **Explored paths**:
+  - `src/App.tsx`: Interface `Lead`, `COLUMNS`, `isSlaDelayed`, card rendering loop, drag-and-drop handlers, `updateLeadStage`
+  - `src/utils/parser.ts`: `parseDataHoraEntrada`, `parseRawText`, `ParsedLead`
+  - `src/index.css`: Stage color variables, `lead-card` styling
+  - `src/supabaseClient.ts`: Supabase client configuration
+- **Key findings**:
+  - `data_hora_entrada` is stored as an ISO 8601 string in Supabase and parsed via `parseDataHoraEntrada` in `src/utils/parser.ts`.
+  - Stages are defined in `COLUMNS` and `Lead['etapa']` with exact stage names `'Roleta'`, `'Pendencia'`, `'Analise'`, `'Conclusao'`.
+  - Helper `isSlaDelayed` at `src/App.tsx:398` checks `(now - entryTime) / (1000 * 60 * 60) >= 2` when `etapa !== 'Conclusao'`.
+  - Border and badge highlighting is currently applied conditionally at `src/App.tsx:1448` and `1465-1484`.
+- **Unexplored areas**: None (all relevant files in `src/` examined).
 
 ## Key Decisions Made
-- Initiating code exploration.
+- Confirmed existing implementation structure and formulated concrete design recommendations for Requirement R1.
 
 ## Artifact Index
 - ORIGINAL_REQUEST.md — Original request instructions
 - BRIEFING.md — Working briefing index
+- progress.md — Liveness heartbeat & task checklist
+- analysis.md — Detailed investigation report & R1 design recommendations
+- handoff.md — Self-contained 5-component handoff report
