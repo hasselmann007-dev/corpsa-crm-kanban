@@ -30,24 +30,25 @@ function runSLATests() {
   }
 
   // -------------------------------------------------------------
-  // Test Case 3: Requirement R1 - Lead SLA (> 120m overdue)
+  // Test Case 3: Requirement R1 - Lead SLA (> 120m overdue in Roleta)
   // -------------------------------------------------------------
   {
-    console.log("\nRunning Test 3: Lead created > 120m ago (121 minutes)");
+    console.log("\nRunning Test 3: Lead created > 120m ago (121 minutes) in 'Roleta'");
     const entryTime = new Date(baseNow.getTime() - (121 * 60 * 1000)).toISOString();
-    const result = isLeadSLAOverdue(entryTime, 'Analise', baseNow);
-    assert.strictEqual(result, true, "Lead over 120m should be marked overdue");
+    const result = isLeadSLAOverdue(entryTime, 'Roleta', baseNow);
+    assert.strictEqual(result, true, "Lead over 120m in Roleta should be marked overdue");
     console.log("Test 3 Passed!");
   }
 
   // -------------------------------------------------------------
-  // Test Case 4: Requirement R1 - Lead SLA ('Conclusao' stage freeze)
+  // Test Case 4: Requirement R1 - Lead SLA ('Pendencia' / 'Analise' / 'Conclusao' no alert)
   // -------------------------------------------------------------
   {
-    console.log("\nRunning Test 4: Lead created > 120m ago in stage 'Conclusao'");
+    console.log("\nRunning Test 4: Lead created > 120m ago in stage 'Pendencia' or 'Conclusao'");
     const entryTime = new Date(baseNow.getTime() - (180 * 60 * 1000)).toISOString();
-    const result = isLeadSLAOverdue(entryTime, 'Conclusao', baseNow);
-    assert.strictEqual(result, false, "Lead in Conclusao stage should freeze SLA and not be overdue");
+    assert.strictEqual(isLeadSLAOverdue(entryTime, 'Pendencia', baseNow), false, "Lead in Pendencia should NOT show SLA alert");
+    assert.strictEqual(isLeadSLAOverdue(entryTime, 'Analise', baseNow), false, "Lead in Analise should NOT show SLA alert");
+    assert.strictEqual(isLeadSLAOverdue(entryTime, 'Conclusao', baseNow), false, "Lead in Conclusao should NOT show SLA alert");
     console.log("Test 4 Passed!");
   }
 

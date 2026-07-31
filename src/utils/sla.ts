@@ -45,8 +45,14 @@ export function isLeadSLAOverdue(
   etapa?: string,
   now: Date = new Date()
 ): boolean {
+  if (!dataHoraEntrada || !etapa) {
+    return false;
+  }
+
   const normalizedStage = (etapa || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-  if (!dataHoraEntrada || normalizedStage === 'conclusao') {
+  
+  // SLA delay alert ONLY applies to cards in the Roleta stage
+  if (!normalizedStage.includes('roleta')) {
     return false;
   }
 
