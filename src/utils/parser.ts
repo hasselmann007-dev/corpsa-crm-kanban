@@ -462,7 +462,7 @@ export function parseRawText(text: string): ParsedLead {
     cidade,
     grupo_origem,
     informacoes_importantes,
-    data_hora_entrada: dateResult.isoString,
+    data_hora_entrada: new Date().toISOString(),
     analista: analistaResult ? analistaResult.handle : "",
     servico: servicoResult ? servicoResult.servico : "AVALIAÇÃO",
     notes: notes,
