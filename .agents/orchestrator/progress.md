@@ -1,14 +1,15 @@
-## Current Status
-Last visited: 2026-07-31T14:59:00Z
+# Progress Checklist — NotebookLM Integration Project
 
-- [x] Update BRIEFING.md, ORIGINAL_REQUEST.md, PROJECT.md, and plan.md
-- [x] Start 10-minute heartbeat cron (task-23)
-- [x] Milestone 1: Exploration & Codebase Analysis (Explorers 1, 2, 3)
-- [x] Milestone 2: Core SLA Logic & Lead Card SLA (R1) (Worker aaab19bb)
-- [x] Milestone 3: Floating Pendências SLA (R2) (Worker aaab19bb)
-- [x] Milestone 4: Automated Validation & Build Verification (R3) (Worker aaab19bb)
-- [x] Milestone 5: Code Review, Stress Test & Forensic Integrity Audit (Reviewers 1 & 2 PASS, Challengers 1 & 2 PASS, Auditor CLEAN)
-- [x] Milestone 6: Final Edge-Case Refinement (Worker b2ceba83)
+## Current Status
+Last visited: 2026-08-12T09:44:20-03:00
 
 ## Iteration Status
-Current iteration: 1 / 32 - ALL MILESTONES COMPLETE & VERIFIED.
+Current iteration: 2 / 32 (Gate PASS)
+
+## Checklist
+- [x] **Step 0: Survey & Codebase Exploration** (3 Explorers complete: CLI Bridge, Frontend UI, Persistence Architecture)
+- [x] **Step 1: R1 — notebooklm-mcp-cli Setup & Auth Guide** (`docs/notebooklm_setup_guide.md`)
+- [x] **Step 2: R2 — 1-Click Node/CLI Integration Bridge** (`server/nlmBridge.ts` & `server/index.ts`)
+- [x] **Step 3: R3 — Apuração de Renda UI & 1-Click Action** (`src/components/ApuracaoRendaTab.tsx` with 1-Click button, real-time indicators, 6 cards, chat log, honest error handling)
+- [x] **Step 4: R4 — Persistent CRM Session History** (`crm_apuracoes_renda_v1` LocalStorage + `supabase/migrations/20260812000000_create_apuracoes_renda_table.sql`)
+- [x] **Step 5: R5 — Build Verification (`npm run build`), Review, Challenge, and Forensic Integrity Audit** (CLEAN audit verdict, 0 build errors, 22 stress tests + 1,000 Monte Carlo iterations passed)

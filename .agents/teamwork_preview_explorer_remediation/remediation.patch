@@ -1,0 +1,169 @@
+*** src/components/ApuracaoRendaTab.tsx	2026-08-12 09:30:00.000000000 -0300
+--- src/components/ApuracaoRendaTab.tsx	2026-08-12 09:35:00.000000000 -0300
+***************
+*** 145,156 ****
+    const [sessoes, setSessoes] = useState<ApuracaoSessao[]>(() => {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+!           return parsed.map((s: any) => ({
+                ...s,
+!               rendaFormal: s.rendaFormal !== undefined ? Number(s.rendaFormal) : (s.rendaBruta || 0),
+!               rendaInformal: s.rendaInformal !== undefined ? Number(s.rendaInformal) : 0
+              }));
+          }
+        }
+--- 145,166 ----
+    const [sessoes, setSessoes] = useState<ApuracaoSessao[]>(() => {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+!           return parsed
+!             .filter((s: any) => s && typeof s === 'object')
+!             .map((s: any) => ({
+                ...s,
+!               nomeCliente: s.nomeCliente || '',
+!               cpfCliente: s.cpfCliente || '',
+!               status: s.status || 'Em Análise',
+!               dataCriacao: s.dataCriacao || new Date().toISOString(),
+!               regrasConsiderar: s.regrasConsiderar || '',
+!               regrasDesconsiderar: s.regrasDesconsiderar || '',
+!               rendaFormal: s.rendaFormal ?? s.rendaBruta ?? 0,
+!               rendaInformal: s.rendaInformal ?? 0,
+!               rendaBruta: s.rendaBruta ?? 0,
+!               rendaLiquida: s.rendaLiquida ?? 0,
+!               descontosDesconsiderados: s.descontosDesconsiderados ?? 0,
+!               capacidadePagamento: s.capacidadePagamento ?? 0,
+!               arquivos: Array.isArray(s.arquivos) ? s.arquivos : [],
+!               mensagens: Array.isArray(s.mensagens) ? s.mensagens : []
+              }));
+          }
+        }
+***************
+*** 203,219 ****
+            const remoteSessoes: ApuracaoSessao[] = data.map((item: any) => ({
+              id: item.id,
+!             nomeCliente: item.nome_cliente,
+!             cpfCliente: item.cpf_cliente,
+              status: item.status || 'Em Análise',
+              dataCriacao: item.data_criacao || new Date().toISOString(),
+              regrasConsiderar: item.regras_considerar || '',
+              regrasDesconsiderar: item.regras_desconsiderar || '',
+!             rendaFormal: Number(item.renda_formal || 0),
+!             rendaInformal: Number(item.renda_informal || 0),
+!             rendaBruta: Number(item.renda_bruta || 0),
+!             rendaLiquida: Number(item.renda_liquida || 0),
+!             descontosDesconsiderados: Number(item.descontos_desconsiderados || 0),
+!             capacidadePagamento: Number(item.capacidade_pagamento || 0),
+              arquivos: Array.isArray(item.arquivos) ? item.arquivos : [],
+              mensagens: Array.isArray(item.mensagens) ? item.mensagens : []
+            }));
+--- 213,229 ----
+            const remoteSessoes: ApuracaoSessao[] = data.map((item: any) => ({
+              id: item.id,
+!             nomeCliente: item.nome_cliente || '',
+!             cpfCliente: item.cpf_cliente || '',
+              status: item.status || 'Em Análise',
+              dataCriacao: item.data_criacao || new Date().toISOString(),
+              regrasConsiderar: item.regras_considerar || '',
+              regrasDesconsiderar: item.regras_desconsiderar || '',
+!             rendaFormal: Number(item.renda_formal ?? 0),
+!             rendaInformal: Number(item.renda_informal ?? 0),
+!             rendaBruta: Number(item.renda_bruta ?? 0),
+!             rendaLiquida: Number(item.renda_liquida ?? 0),
+!             descontosDesconsiderados: Number(item.descontos_desconsiderados ?? 0),
+!             capacidadePagamento: Number(item.capacidade_pagamento ?? 0),
+              arquivos: Array.isArray(item.arquivos) ? item.arquivos : [],
+              mensagens: Array.isArray(item.mensagens) ? item.mensagens : []
+            }));
+***************
+*** 273,277 ****
+!   const filteredSessoes = sessoes.filter(s => 
+!     s.nomeCliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
+!     s.cpfCliente.includes(searchTerm) ||
+!     s.status.toLowerCase().includes(searchTerm.toLowerCase())
+!   );
+--- 283,293 ----
+!   const normalizedSearch = (searchTerm || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+!   const filteredSessoes = sessoes.filter(s => {
+!     const nomeNorm = (s.nomeCliente || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+!     const cpfNorm = (s.cpfCliente || '');
+!     const statusNorm = (s.status || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+!     return nomeNorm.includes(normalizedSearch) || cpfNorm.includes(searchTerm) || statusNorm.includes(normalizedSearch);
+!   });
+***************
+*** 280,316 ****
+-   // Helper calculation for Fallback AI response if API offline
+-   const calculateFallbackMetrics = (sessao: ApuracaoSessao) => {
+-     ... (DELETED ENTIRELY TO ELIMINATE FACADE SYNTHETIC FALLBACK)
+-   };
+--- 280,280 ----
+***************
+*** 381,399 ****
+          if (response.ok) {
+            const json = await response.json();
+            resData = {
+              rendaFormal: Number(json.rendaFormal || json.formalIncome || 0),
+              rendaInformal: Number(json.rendaInformal || json.informalIncome || 0),
+              rendaBruta: Number(json.rendaBruta || json.totalGrossIncome || 0),
+              descontosDesconsiderados: Number(json.descontosDesconsiderados || json.disregardedDeductions || 0),
+              rendaLiquida: Number(json.rendaLiquida || json.approvedNetIncome || 0),
+              capacidadePagamento: Number(json.capacidadePagamento || json.paymentCapacity || 0),
+              resumoParecer: json.resumoParecer || json.parecer || json.summary || 'Apuração concluída via NotebookLM.'
+            };
+          } else {
+!           // Fallback if backend API offline
+!           resData = calculateFallbackMetrics(activeSessao);
+          }
+        } catch {
+!         // Fallback robust calculation on network / offline
+!         resData = calculateFallbackMetrics(activeSessao);
+        }
+--- 381,420 ----
+          if (response.ok) {
+            const json = await response.json();
+            const dataPayload = json.data || json;
+            resData = {
+              rendaFormal: Number(dataPayload.rendaFormal ?? dataPayload.formalIncome ?? 0),
+              rendaInformal: Number(dataPayload.rendaInformal ?? dataPayload.informalIncome ?? 0),
+              rendaBruta: Number(dataPayload.rendaBruta ?? dataPayload.totalGrossIncome ?? 0),
+              descontosDesconsiderados: Number(dataPayload.descontosDesconsiderados ?? dataPayload.disregardedDeductions ?? 0),
+              rendaLiquida: Number(dataPayload.rendaLiquida ?? dataPayload.approvedNetIncome ?? 0),
+              capacidadePagamento: Number(dataPayload.capacidadePagamento ?? dataPayload.paymentCapacity ?? 0),
+              resumoParecer: dataPayload.resumoParecer || dataPayload.parecer || dataPayload.summary || 'Apuração concluída via NotebookLM.'
+            };
+          } else {
+!           let errText = '';
+!           try {
+!             const errJson = await response.json();
+!             errText = errJson.message || errJson.error || '';
+!             if (errJson.error === 'AUTH_REQUIRED' || response.status === 401) {
+!               errText = "Autenticação necessária: Execute 'nlm login' no terminal para conectar a conta do NotebookLM.";
+!             } else if (errJson.error === 'CLI_NOT_FOUND' || response.status === 500 && errText.includes('CLI')) {
+!               errText = "CLI NotebookLM não encontrada. Execute 'uv tool install notebooklm-mcp-cli' no terminal.";
+!             }
+!           } catch {
+!             errText = `O servidor local de integração (server/index.ts) retornou erro (HTTP ${response.status}). Execute 'npm run server' no terminal.`;
+!           }
+! 
+!           setAnalysisState({
+!             status: 'error',
+!             progressPercent: 0,
+!             currentStepMessage: '',
+!             errorMessage: errText || `O servidor de integração está offline ou com falha. Execute 'npm run server' no terminal.`
+!           });
+!           return;
+          }
+        } catch (networkErr: any) {
+!         setAnalysisState({
+!           status: 'error',
+!           progressPercent: 0,
+!           currentStepMessage: '',
+!           errorMessage: "O servidor local de integração (server/index.ts) está offline. Execute 'npm run server' no terminal para conectar a ponte do NotebookLM."
+!         });
+!         return;
+        }
