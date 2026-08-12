@@ -35,12 +35,24 @@ export interface IncomeAuditResult {
   rawResponse?: string;
 }
 
+function getNlmCmd(): string {
+  const customPath = 'C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\nlm.exe';
+  if (fs.existsSync(customPath)) {
+    return `"${customPath}"`;
+  }
+  return 'nlm';
+}
+
 /**
  * Executes CLI command line with configurable timeout and buffer
  */
 function runCommand(commandStr: string, timeoutMs: number = 120000): Promise<{ stdout: string; stderr: string; code: number }> {
+  const finalCmd = commandStr.startsWith('nlm ') 
+    ? commandStr.replace(/^nlm\s+/, `${getNlmCmd()} `)
+    : commandStr;
+
   return new Promise((resolve) => {
-    exec(commandStr, { timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+    exec(finalCmd, { timeout: timeoutMs, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
       const code = error && typeof error.code === 'number' ? error.code : (error ? 1 : 0);
       resolve({
         stdout: stdout ? stdout.trim() : '',
