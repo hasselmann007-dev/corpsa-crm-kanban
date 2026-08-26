@@ -137,6 +137,46 @@ app.post('/api/nlm/analyze', upload.array('files'), async (req, res) => {
   }
 });
 
+import { testOpenRouterMcp, chatWithOpenRouter } from '../tools/openrouterTool.js';
+
+/**
+ * GET /api/openrouter/test
+ * Test connection to OpenRouter MCP endpoint
+ */
+app.get('/api/openrouter/test', async (req, res) => {
+  try {
+    const apiKey = (req.query.apiKey as string) || '';
+    const result = await testOpenRouterMcp(apiKey);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({
+      connected: false,
+      message: error.message || 'Erro ao testar OpenRouter MCP'
+    });
+  }
+});
+
+/**
+ * POST /api/agent/chat
+ * Handle chat interaction with AI Agent via OpenRouter
+ */
+app.post('/api/agent/chat', async (req, res) => {
+  try {
+    const { messages, model, apiKey } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      res.status(400).json({ error: 'Array de mensagens é obrigatório' });
+      return;
+    }
+    const result = await chatWithOpenRouter(messages, model, apiKey);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Erro ao processar mensagem com OpenRouter'
+    });
+  }
+});
+
 app.listen(PORT, () => {
-  console.log(`🚀 CORPSA CRM NotebookLM Bridge rodando na porta ${PORT}`);
+  console.log(`🚀 CORPSA CRM Integration Server rodando na porta ${PORT}`);
 });
