@@ -29,7 +29,7 @@ interface ChatMessage {
 
 export const AgenteIAChatTab: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem('crm_agente_ia_live_chat_v5');
+    const saved = localStorage.getItem('crm_agente_ia_live_chat_v6');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -41,9 +41,9 @@ export const AgenteIAChatTab: React.FC = () => {
       {
         id: '1',
         sender: 'agent',
-        text: 'Olá! Sou o Agente de IA do CORPSA CRM. Estou pronto para prestar atendimento imobiliário, tirar dúvidas sobre crédito e seguir as regras da constituição em skills/constituicao.md. Como posso ajudar?',
+        text: 'Olá! Sou o Agente de IA do CORPSA CRM conectado ao NVIDIA Nemotron 3 Ultra 550B Gratuito. Estou pronto para prestar atendimento imobiliário, tirar dúvidas sobre crédito e seguir as regras da constituição em skills/constituicao.md. Como posso ajudar?',
         timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        modelUsed: 'google/gemini-3.6-flash'
+        modelUsed: 'nvidia/nemotron-3-ultra-550b-a55b:free'
       }
     ];
   });
@@ -53,7 +53,7 @@ export const AgenteIAChatTab: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>(() => {
     return localStorage.getItem('openrouter_api_key_v1') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
   });
-  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem('openrouter_model_v1') || 'google/gemini-3.6-flash');
+  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem('openrouter_model_v1') || 'nvidia/nemotron-3-ultra-550b-a55b:free');
   const [temperature, setTemperature] = useState<number>(() => {
     const saved = localStorage.getItem('openrouter_temp_v1');
     return saved ? parseFloat(saved) : 0.7;
@@ -86,7 +86,7 @@ export const AgenteIAChatTab: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('crm_agente_ia_live_chat_v5', JSON.stringify(messages));
+    localStorage.setItem('crm_agente_ia_live_chat_v6', JSON.stringify(messages));
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -176,13 +176,13 @@ export const AgenteIAChatTab: React.FC = () => {
       return await tryRequest(modelToUse);
     } catch (err: any) {
       const errStr = (err.message || '').toLowerCase();
-      // If user gets Insufficient credits error, automatically fallback to openrouter/free model
-      if ((errStr.includes('insufficient credits') || errStr.includes('never purchased credits')) && modelToUse !== 'openrouter/free') {
-        console.warn('Créditos insuficientes no modelo pago. Redirecionando para openrouter/free...');
-        const freeResult = await tryRequest('openrouter/free');
+      // If user gets Insufficient credits error, automatically fallback to nvidia/nemotron-3-ultra-550b-a55b:free
+      if ((errStr.includes('insufficient credits') || errStr.includes('never purchased credits')) && modelToUse !== 'nvidia/nemotron-3-ultra-550b-a55b:free') {
+        console.warn('Créditos insuficientes no modelo pago. Redirecionando para nvidia/nemotron-3-ultra-550b-a55b:free...');
+        const freeResult = await tryRequest('nvidia/nemotron-3-ultra-550b-a55b:free');
         return {
-          text: `${freeResult.text}\n\n*(Nota: Resposta gerada via modelo gratuito openrouter/free pois a chave atual não possui créditos pagos).*`,
-          actualModel: 'openrouter/free (Grátis)'
+          text: `${freeResult.text}\n\n*(Nota: Resposta gerada via modelo gratuito NVIDIA Nemotron 3 Ultra 550B pois a chave atual não possui créditos pagos).*`,
+          actualModel: 'nvidia/nemotron-3-ultra-550b-a55b:free (Grátis)'
         };
       }
       throw err;
@@ -266,7 +266,7 @@ export const AgenteIAChatTab: React.FC = () => {
       const agentErrorMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: 'agent',
-        text: `⚠️ Erro no OpenRouter: ${errMsg}\n\nDica: Se sua conta não possui créditos pagos, selecione o modelo "openrouter/free (Grátis)" no menu à direita.`,
+        text: `⚠️ Erro no OpenRouter: ${errMsg}\n\nDica: Selecione o modelo gratuito "NVIDIA Nemotron 3 Ultra 550B (Grátis)" no menu à direita para usar sem necessidade de saldo pago.`,
         timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, agentErrorMsg]);
@@ -292,7 +292,7 @@ export const AgenteIAChatTab: React.FC = () => {
       ];
       setMessages(initial);
       setErrorMessage('');
-      localStorage.setItem('crm_agente_ia_live_chat_v5', JSON.stringify(initial));
+      localStorage.setItem('crm_agente_ia_live_chat_v6', JSON.stringify(initial));
     }
   };
 
@@ -328,12 +328,12 @@ export const AgenteIAChatTab: React.FC = () => {
                 width: '38px', 
                 height: '38px', 
                 borderRadius: '10px', 
-                backgroundColor: '#4f46e5', 
+                backgroundColor: '#76b900', 
                 display: 'flex', 
                 alignItems: 'center', 
                 justifyContent: 'center',
                 color: 'white',
-                boxShadow: '0 2px 6px rgba(79, 70, 229, 0.3)'
+                boxShadow: '0 2px 6px rgba(118, 185, 0, 0.3)'
               }}
             >
               <FiCpu size={22} />
@@ -345,8 +345,8 @@ export const AgenteIAChatTab: React.FC = () => {
                 </h2>
                 <span 
                   style={{ 
-                    backgroundColor: '#ede9fe', 
-                    color: '#6d28d9', 
+                    backgroundColor: '#dcfce7', 
+                    color: '#15803d', 
                     fontSize: '0.68rem', 
                     fontWeight: 700, 
                     padding: '2px 8px', 
@@ -354,12 +354,12 @@ export const AgenteIAChatTab: React.FC = () => {
                     letterSpacing: '0.5px'
                   }}
                 >
-                  GEMINI 3.6 FLASH
+                  NVIDIA NEMOTRON 3 ULTRA 550B (GRÁTIS)
                 </span>
               </div>
               <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: apiKey.trim() ? '#10b981' : '#f59e0b' }}></span>
-                {apiKey.trim() ? 'Chave API Configurada' : 'Aguardando Chave API do OpenRouter'}
+                {apiKey.trim() ? 'Chave API Configurada (Gratuita)' : 'Aguardando Chave API do OpenRouter'}
               </span>
             </div>
           </div>
@@ -490,7 +490,7 @@ export const AgenteIAChatTab: React.FC = () => {
                       width: '28px', 
                       height: '28px', 
                       borderRadius: '50%', 
-                      backgroundColor: '#4f46e5', 
+                      backgroundColor: '#76b900', 
                       display: 'flex', 
                       alignItems: 'center', 
                       justifyContent: 'center', 
@@ -557,7 +557,7 @@ export const AgenteIAChatTab: React.FC = () => {
                   width: '28px', 
                   height: '28px', 
                   borderRadius: '50%', 
-                  backgroundColor: '#4f46e5', 
+                  backgroundColor: '#76b900', 
                   display: 'flex', 
                   alignItems: 'center', 
                   justifyContent: 'center', 
@@ -576,7 +576,7 @@ export const AgenteIAChatTab: React.FC = () => {
                   border: '1px solid #e2e8f0'
                 }}
               >
-                Gerando resposta com Gemini 3.6 Flash...
+                Gerando resposta com NVIDIA Nemotron 3 Ultra 550B...
               </div>
             </div>
           )}
@@ -603,7 +603,7 @@ export const AgenteIAChatTab: React.FC = () => {
           <div style={{ display: 'flex', gap: '10px' }}>
             <input 
               type="text"
-              placeholder="Converse com o Agente (Gemini 3.6 Flash)..."
+              placeholder="Converse com o Agente (NVIDIA Nemotron 3 Ultra 550B)..."
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               style={{
@@ -619,7 +619,7 @@ export const AgenteIAChatTab: React.FC = () => {
               type="submit"
               disabled={!inputMessage.trim() || isTyping}
               style={{
-                backgroundColor: '#4f46e5',
+                backgroundColor: '#76b900',
                 color: '#ffffff',
                 border: 'none',
                 borderRadius: '8px',
@@ -662,8 +662,8 @@ export const AgenteIAChatTab: React.FC = () => {
               padding: '8px',
               borderRadius: '6px',
               border: 'none',
-              backgroundColor: activeSideTab === 'config' ? '#ede9fe' : 'transparent',
-              color: activeSideTab === 'config' ? '#6d28d9' : '#64748b',
+              backgroundColor: activeSideTab === 'config' ? '#dcfce7' : 'transparent',
+              color: activeSideTab === 'config' ? '#15803d' : '#64748b',
               fontWeight: 600,
               fontSize: '0.8rem',
               display: 'flex',
@@ -683,8 +683,8 @@ export const AgenteIAChatTab: React.FC = () => {
               padding: '8px',
               borderRadius: '6px',
               border: 'none',
-              backgroundColor: activeSideTab === 'constitution' ? '#ede9fe' : 'transparent',
-              color: activeSideTab === 'constitution' ? '#6d28d9' : '#64748b',
+              backgroundColor: activeSideTab === 'constitution' ? '#dcfce7' : 'transparent',
+              color: activeSideTab === 'constitution' ? '#15803d' : '#64748b',
               fontWeight: 600,
               fontSize: '0.8rem',
               display: 'flex',
@@ -734,7 +734,7 @@ export const AgenteIAChatTab: React.FC = () => {
               </span>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
-                <FiLayers size={14} style={{ color: '#4f46e5' }} />
+                <FiLayers size={14} style={{ color: '#76b900' }} />
                 <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>Modelo da IA</label>
               </div>
               <select
@@ -749,13 +749,12 @@ export const AgenteIAChatTab: React.FC = () => {
                   fontWeight: 600
                 }}
               >
-                <option value="google/gemini-3.6-flash">⚡ Google: Gemini 3.6 Flash (Selecionado)</option>
-                <option value="openrouter/free">💡 openrouter/free (Grátis - Sem Créditos)</option>
+                <option value="nvidia/nemotron-3-ultra-550b-a55b:free">✨ NVIDIA: Nemotron 3 Ultra 550B (Grátis)</option>
+                <option value="google/gemma-4-31b-it:free">Google: Gemma 4 31B (Grátis)</option>
+                <option value="liquid/lfm-2.5-2.6b:free">Liquid: LFM 2.5 2.6B (Grátis)</option>
+                <option value="openrouter/free">openrouter/free (Grátis - Auto Roteador)</option>
+                <option value="google/gemini-3.6-flash">Google: Gemini 3.6 Flash</option>
                 <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
-                <option value="google/gemini-3.7-flash">Google: Gemini 3.7 Flash</option>
-                <option value="google/gemini-2.5-pro">Google: Gemini 2.5 Pro</option>
-                <option value="meta-llama/llama-3.3-70b-instruct">Meta: Llama 3.3 70B</option>
-                <option value="anthropic/claude-3.5-haiku">Anthropic: Claude 3.5 Haiku</option>
               </select>
 
               {/* Temperature Slider */}
@@ -776,21 +775,21 @@ export const AgenteIAChatTab: React.FC = () => {
               </div>
             </div>
 
-            {/* Free model recommendation alert if user has zero credits */}
+            {/* Free model recommendation banner */}
             <div 
               style={{ 
-                backgroundColor: '#eff6ff', 
+                backgroundColor: '#f0fdf4', 
                 padding: '12px', 
                 borderRadius: '8px', 
-                border: '1px solid #bfdbfe',
+                border: '1px solid #bbf7d0',
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: '8px'
               }}
             >
-              <FiZap size={16} style={{ color: '#2563eb', flexShrink: 0, marginTop: '2px' }} />
-              <span style={{ fontSize: '0.74rem', color: '#1e40af', lineHeight: '1.4' }}>
-                <strong>Dica para contas sem créditos pagos:</strong> Se sua chave OpenRouter for nova e sem saldo, selecione a opção <code>openrouter/free (Grátis)</code> no menu de modelos para conversar sem restrição de saldo!
+              <FiZap size={16} style={{ color: '#16a34a', flexShrink: 0, marginTop: '2px' }} />
+              <span style={{ fontSize: '0.74rem', color: '#15803d', lineHeight: '1.4' }}>
+                <strong>Modelo Gratuito Conectado:</strong> O modelo <code>nvidia/nemotron-3-ultra-550b-a55b:free</code> é 100% gratuito e não exige nenhum saldo pago na sua chave OpenRouter!
               </span>
             </div>
 
@@ -828,7 +827,7 @@ export const AgenteIAChatTab: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '10px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <FiBookOpen size={14} style={{ color: '#4f46e5' }} />
+                <FiBookOpen size={14} style={{ color: '#15803d' }} />
                 <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>Constituição do Agente</span>
               </div>
             </div>
@@ -860,7 +859,7 @@ export const AgenteIAChatTab: React.FC = () => {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '6px',
-                backgroundColor: constitutionSaved ? '#16a34a' : '#4f46e5',
+                backgroundColor: constitutionSaved ? '#16a34a' : '#15803d',
                 color: '#ffffff',
                 border: 'none',
                 borderRadius: '6px',
