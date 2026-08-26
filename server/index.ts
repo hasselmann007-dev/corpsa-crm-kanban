@@ -137,7 +137,7 @@ app.post('/api/nlm/analyze', upload.array('files'), async (req, res) => {
   }
 });
 
-import { testOpenRouterMcp, chatWithOpenRouter } from '../tools/openrouterTool.js';
+import { testOpenRouterMcp, chatWithOpenRouter, getAgentConstitution, saveAgentConstitution } from '../tools/openrouterTool.js';
 
 /**
  * GET /api/openrouter/test
@@ -157,17 +157,54 @@ app.get('/api/openrouter/test', async (req, res) => {
 });
 
 /**
+ * GET /api/agent/constitution
+ * Read current skills/constituicao.md
+ */
+app.get('/api/agent/constitution', (_req, res) => {
+  try {
+    const constitution = getAgentConstitution();
+    res.json({ success: true, constitution });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/agent/constitution
+ * Update skills/constituicao.md from sandbox
+ */
+app.post('/api/agent/constitution', (req, res) => {
+  try {
+    const { content } = req.body;
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: 'Conteúdo deve ser uma string' });
+      return;
+    }
+    const success = saveAgentConstitution(content);
+    res.json({ success });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * POST /api/agent/chat
- * Handle chat interaction with AI Agent via OpenRouter
+ * Handle chat interaction with AI Agent via OpenRouter in Sandbox
  */
 app.post('/api/agent/chat', async (req, res) => {
   try {
-    const { messages, model, apiKey } = req.body;
+    const { messages, model, apiKey, temperature, customConstitution } = req.body;
     if (!messages || !Array.isArray(messages)) {
       res.status(400).json({ error: 'Array de mensagens é obrigatório' });
       return;
     }
-    const result = await chatWithOpenRouter(messages, model, apiKey);
+    const result = await chatWithOpenRouter(
+      messages, 
+      model || 'google/gemini-3.7-flash', 
+      apiKey, 
+      typeof temperature === 'number' ? temperature : 0.7,
+      customConstitution
+    );
     res.json({ success: true, ...result });
   } catch (error: any) {
     res.status(500).json({

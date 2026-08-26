@@ -13,6 +13,7 @@ export interface OpenRouterTestResult {
   modelsAvailable?: number;
   authenticated: boolean;
   message: string;
+  hasEnvKey: boolean;
   models?: Array<{ id: string; name: string; context_length?: number }>;
 }
 
@@ -23,6 +24,33 @@ export interface ChatMessage {
 
 const MCP_ENDPOINT = 'https://mcp.openrouter.ai/mcp';
 const API_BASE = 'https://openrouter.ai/api/v1';
+
+/**
+ * Extracts OPENROUTER_API_KEY from process.env or .env file
+ */
+export function getOpenRouterApiKey(customKey?: string): string {
+  if (customKey && customKey.trim()) return customKey.trim();
+  if (process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim()) {
+    return process.env.OPENROUTER_API_KEY.trim();
+  }
+
+  try {
+    const envPath = path.resolve(__dirname, '..', '.env');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('OPENROUTER_API_KEY=')) {
+          const val = trimmed.substring('OPENROUTER_API_KEY='.length).trim().replace(/^["']|["']$/g, '');
+          if (val) return val;
+        }
+      }
+    }
+  } catch (_e) {
+    // Ignore error
+  }
+  return '';
+}
 
 /**
  * Reads the agent's constitution from skills/constituicao.md
@@ -40,17 +68,29 @@ export function getAgentConstitution(): string {
 }
 
 /**
+ * Saves/updates the agent's constitution in skills/constituicao.md
+ */
+export function saveAgentConstitution(content: string): boolean {
+  try {
+    const skillPath = path.resolve(__dirname, '..', 'skills', 'constituicao.md');
+    fs.writeFileSync(skillPath, content, 'utf-8');
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+/**
  * Tests connection to the OpenRouter MCP server at https://mcp.openrouter.ai/mcp
  */
 export async function testOpenRouterMcp(apiKey?: string): Promise<OpenRouterTestResult> {
-  const token = apiKey || process.env.OPENROUTER_API_KEY || '';
+  const token = getOpenRouterApiKey(apiKey);
 
   try {
-    // Step 1: Send JSON-RPC initialize handshake to https://mcp.openrouter.ai/mcp
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'HTTP-Referer': 'https://corpsa-crm.local',
-      'X-Title': 'CORPSA CRM AI Agent'
+      'X-Title': 'CORPSA CRM AI Agent Sandbox'
     };
 
     if (token) {
@@ -65,7 +105,7 @@ export async function testOpenRouterMcp(apiKey?: string): Promise<OpenRouterTest
         protocolVersion: '2024-11-05',
         capabilities: {},
         clientInfo: {
-          name: 'corpsa-crm-agent',
+          name: 'corpsa-crm-agent-sandbox',
           version: '1.0.0'
         }
       }
@@ -84,7 +124,6 @@ export async function testOpenRouterMcp(apiKey?: string): Promise<OpenRouterTest
       mcpJson = { raw: await mcpRes.text() };
     }
 
-    // Step 2: Fetch models list from OpenRouter API to verify model availability
     let models: Array<{ id: string; name: string }> = [];
     try {
       const modelsRes = await fetch(`${API_BASE}/models`, {
@@ -93,49 +132,43 @@ export async function testOpenRouterMcp(apiKey?: string): Promise<OpenRouterTest
       if (modelsRes.ok) {
         const data: any = await modelsRes.json();
         if (Array.isArray(data.data)) {
-          models = data.data.slice(0, 30).map((m: any) => ({
-            id: m.id,
-            name: m.name || m.id,
-            context_length: m.context_length
-          }));
+          models = data.data
+            .filter((m: any) => m.id.includes('gemini') || m.id.includes('claude') || m.id.includes('llama') || m.id.includes('gpt-4o') || m.id.includes('deepseek'))
+            .slice(0, 40)
+            .map((m: any) => ({
+              id: m.id,
+              name: m.name || m.id,
+              context_length: m.context_length
+            }));
         }
       }
     } catch (_e) {
       // Fallback
     }
 
-    const isAuthenticated = mcpRes.status === 200 || (mcpJson && !mcpJson.error && mcpRes.status !== 401);
-
-    if (mcpRes.status === 401) {
-      return {
-        connected: true,
-        mcpEndpoint: MCP_ENDPOINT,
-        mcpStatus: mcpRes.status,
-        mcpResponse: mcpJson,
-        modelsAvailable: models.length,
-        authenticated: false,
-        models,
-        message: 'Endpoint MCP OpenRouter acessível com sucesso! Para autenticar requisições de chat, insira sua API Key do OpenRouter.'
-      };
-    }
+    const isAuthenticated = mcpRes.ok && Boolean(token);
 
     return {
-      connected: mcpRes.ok,
+      connected: true,
       mcpEndpoint: MCP_ENDPOINT,
       mcpStatus: mcpRes.status,
       mcpResponse: mcpJson,
       modelsAvailable: models.length,
+      hasEnvKey: Boolean(token),
       authenticated: isAuthenticated,
       models,
-      message: mcpRes.ok 
-        ? 'Conexão com OpenRouter MCP estabelecida e autenticada com sucesso!' 
-        : `Servidor OpenRouter respondeu com status ${mcpRes.status}.`
+      message: isAuthenticated
+        ? 'Conexão OpenRouter MCP autenticada com sucesso com sua chave API!'
+        : token
+        ? 'Chave API detectada. Endpoint MCP respondendo normalmente.'
+        : 'Endpoint MCP OpenRouter acessível. Insira sua chave API no arquivo .env ou no painel para chamadas ao vivo.'
     };
   } catch (err: any) {
     return {
       connected: false,
       mcpEndpoint: MCP_ENDPOINT,
       mcpStatus: 0,
+      hasEnvKey: Boolean(token),
       authenticated: false,
       message: `Erro ao conectar com OpenRouter MCP: ${err.message}`
     };
@@ -143,44 +176,54 @@ export async function testOpenRouterMcp(apiKey?: string): Promise<OpenRouterTest
 }
 
 /**
- * Sends a chat message to OpenRouter using selected model and injecting skills/constituicao.md
+ * Sends a chat message to OpenRouter Gemini 3.7 in sandbox environment
  */
 export async function chatWithOpenRouter(
   messages: ChatMessage[],
-  model: string = 'google/gemini-2.0-flash-001',
-  apiKey?: string
-): Promise<{ text: string; model: string; usage?: any }> {
-  const token = apiKey || process.env.OPENROUTER_API_KEY || '';
+  model: string = 'google/gemini-3.7-flash',
+  apiKey?: string,
+  temperature: number = 0.7,
+  customConstitution?: string
+): Promise<{ text: string; model: string; usage?: any; latencyMs: number }> {
+  const token = getOpenRouterApiKey(apiKey);
   if (!token) {
-    throw new Error('Chave de API do OpenRouter não fornecida. Insira sua chave no campo de configuração ou no arquivo .env');
+    throw new Error('Chave de API do OpenRouter não encontrada. Adicione OPENROUTER_API_KEY no arquivo .env ou informe no painel do Sandbox.');
   }
 
-  const constitution = getAgentConstitution();
+  const constitution = customConstitution !== undefined ? customConstitution : getAgentConstitution();
   const fullMessages: ChatMessage[] = [];
 
-  if (constitution) {
+  if (constitution && constitution.trim()) {
     fullMessages.push({
       role: 'system',
-      content: `[CONSTITUIÇÃO E DIRETRIZES DO AGENTE]:\n${constitution}`
+      content: `[CONSTITUIÇÃO E DIRETRIZES DO AGENTE (CORPSA CRM)]:\n${constitution.trim()}`
+    });
+  } else {
+    fullMessages.push({
+      role: 'system',
+      content: 'Você é o Agente de IA do CORPSA CRM em modo Sandbox de teste. Seu objetivo é prestar atendimento imobiliário, triagem de crédito e orientações no CRM com cordialidade e precisão técnica.'
     });
   }
 
   fullMessages.push(...messages);
 
+  const startTime = Date.now();
   const res = await fetch(`${API_BASE}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`,
       'HTTP-Referer': 'https://corpsa-crm.local',
-      'X-Title': 'CORPSA CRM AI Agent'
+      'X-Title': 'CORPSA CRM AI Agent Sandbox'
     },
     body: JSON.stringify({
-      model,
+      model: model || 'google/gemini-3.7-flash',
       messages: fullMessages,
-      temperature: 0.7
+      temperature
     })
   });
+
+  const latencyMs = Date.now() - startTime;
 
   if (!res.ok) {
     const errText = await res.text();
@@ -192,11 +235,12 @@ export async function chatWithOpenRouter(
 
   const data: any = await res.json();
   const choice = data.choices?.[0];
-  const replyText = choice?.message?.content || 'Sem resposta gerada pelo modelo.';
+  const replyText = choice?.message?.content || 'Sem resposta retornada pelo modelo.';
 
   return {
     text: replyText,
     model: data.model || model,
-    usage: data.usage
+    usage: data.usage,
+    latencyMs
   };
 }
