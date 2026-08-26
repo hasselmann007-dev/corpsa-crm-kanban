@@ -15,8 +15,14 @@ import {
   FiCode,
   FiAlertCircle,
   FiPlay,
-  FiZap
+  FiDatabase,
+  FiClock
 } from 'react-icons/fi';
+import { 
+  getOrCreateConversaSupabase, 
+  carregarUltimasMensagensSupabase, 
+  salvarMensagemSupabase 
+} from '../utils/agenteMemoria';
 
 interface ChatMessage {
   id: string;
@@ -28,26 +34,8 @@ interface ChatMessage {
 }
 
 export const AgenteIAChatTab: React.FC = () => {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem('crm_agente_ia_live_chat_v6');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (_e) {
-        // Fallback
-      }
-    }
-    return [
-      {
-        id: '1',
-        sender: 'agent',
-        text: 'Olá! Sou o Agente de IA do CORPSA CRM conectado ao NVIDIA Nemotron 3 Ultra 550B Gratuito. Estou pronto para prestar atendimento imobiliário, tirar dúvidas sobre crédito e seguir as regras da constituição em skills/constituicao.md. Como posso ajudar?',
-        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        modelUsed: 'nvidia/nemotron-3-ultra-550b-a55b:free'
-      }
-    ];
-  });
-
+  const [conversaId, setConversaId] = useState<string>('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [apiKey, setApiKey] = useState<string>(() => {
@@ -66,6 +54,40 @@ export const AgenteIAChatTab: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Initialize Supabase Memory & Load Last 20 Messages
+  useEffect(() => {
+    const initMemory = async () => {
+      const cid = await getOrCreateConversaSupabase();
+      setConversaId(cid);
+
+      // Carrega as últimas 20 mensagens gravadas no Supabase para esse cliente
+      const history = await carregarUltimasMensagensSupabase(cid, 20);
+      if (history.length > 0) {
+        const formatted: ChatMessage[] = history.map((h, i) => ({
+          id: i.toString(),
+          sender: h.sender === 'user' ? 'user' : 'agent',
+          text: h.text,
+          timestamp: h.timestamp,
+          modelUsed: h.model_used
+        }));
+        setMessages(formatted);
+      } else {
+        setMessages([
+          {
+            id: '1',
+            sender: 'agent',
+            text: 'Olá! Sou o Agente de IA do CORPSA CRM com memória ativada no Supabase. Lembro do seu histórico e das últimas 20 conversas gravadas nas tabelas agente_conversas e agente_mensagens. Como posso ajudar?',
+            timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+            modelUsed: selectedModel
+          }
+        ]);
+      }
+    };
+
+    initMemory();
+    fetchConstitution();
+  }, []);
+
   // Load Constitution
   const fetchConstitution = async () => {
     try {
@@ -82,11 +104,6 @@ export const AgenteIAChatTab: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchConstitution();
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem('crm_agente_ia_live_chat_v6', JSON.stringify(messages));
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -122,15 +139,18 @@ export const AgenteIAChatTab: React.FC = () => {
     }
   };
 
-  // Direct OpenRouter completion handler with automatic free model fallback
-  const callOpenRouterApi = async (messagesHistory: ChatMessage[], keyToUse: string, modelToUse: string): Promise<{ text: string; actualModel: string }> => {
+  // Direct OpenRouter completion handler reading last 20 messages from Supabase memory
+  const callOpenRouterApi = async (memoryHistory: { sender: string; text: string }[], keyToUse: string, modelToUse: string): Promise<{ text: string; actualModel: string }> => {
     const systemPrompt = constitutionText && constitutionText.trim()
       ? `[CONSTITUIÇÃO E REGRAS DO AGENTE CORPSA CRM]:\n${constitutionText.trim()}`
-      : 'Você é o Agente de IA do CORPSA CRM. Preste atendimento imobiliário e financeiro com cordialidade, objetividade e clareza.';
+      : 'Você é o Agente de IA do CORPSA CRM com memória contínua de atendimento. Lembre-se das conversas passadas do cliente para dar respostas contextualizadas e personalizadas.';
+
+    // Utiliza estritamente as últimas 20 mensagens do histórico carregado
+    const last20Messages = memoryHistory.slice(-20);
 
     const formattedMessages = [
       { role: 'system', content: systemPrompt },
-      ...messagesHistory.map(m => ({
+      ...last20Messages.map(m => ({
         role: m.sender === 'user' ? 'user' : 'assistant',
         content: m.text
       }))
@@ -176,9 +196,7 @@ export const AgenteIAChatTab: React.FC = () => {
       return await tryRequest(modelToUse);
     } catch (err: any) {
       const errStr = (err.message || '').toLowerCase();
-      // If user gets Insufficient credits error, automatically fallback to nvidia/nemotron-3-ultra-550b-a55b:free
       if ((errStr.includes('insufficient credits') || errStr.includes('never purchased credits')) && modelToUse !== 'nvidia/nemotron-3-ultra-550b-a55b:free') {
-        console.warn('Créditos insuficientes no modelo pago. Redirecionando para nvidia/nemotron-3-ultra-550b-a55b:free...');
         const freeResult = await tryRequest('nvidia/nemotron-3-ultra-550b-a55b:free');
         return {
           text: `${freeResult.text}\n\n*(Nota: Resposta gerada via modelo gratuito NVIDIA Nemotron 3 Ultra 550B pois a chave atual não possui créditos pagos).*`,
@@ -195,27 +213,38 @@ export const AgenteIAChatTab: React.FC = () => {
     if (!text || isTyping) return;
 
     setErrorMessage('');
+    const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       sender: 'user',
       text,
-      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      timestamp
     };
 
-    const newHistory = [...messages, userMsg];
-    setMessages(newHistory);
+    const updatedUIHistory = [...messages, userMsg];
+    setMessages(updatedUIHistory);
     setInputMessage('');
     setIsTyping(true);
 
+    // 1. Grava a mensagem do usuário no Supabase (Tabela 'agente_mensagens')
+    if (conversaId) {
+      await salvarMensagemSupabase(conversaId, 'user', text);
+    }
+
+    // 2. Lê as últimas 20 mensagens do cliente gravadas no Supabase antes da resposta
+    const last20FromSupabase = conversaId 
+      ? await carregarUltimasMensagensSupabase(conversaId, 20)
+      : updatedUIHistory.slice(-20).map(m => ({ sender: m.sender, text: m.text, timestamp: m.timestamp }));
+
     const activeKey = apiKey.trim();
 
-    // 1. Try local server bridge first (reads OPENROUTER_API_KEY from .env directly)
+    // 3. Tenta responder via servidor local se ativo
     try {
       const backendRes = await fetch('http://localhost:3001/api/agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: newHistory.map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text })),
+          messages: last20FromSupabase.map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text })),
           model: selectedModel,
           apiKey: activeKey,
           temperature,
@@ -234,15 +263,18 @@ export const AgenteIAChatTab: React.FC = () => {
             timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
           };
           setMessages(prev => [...prev, agentMsg]);
+          if (conversaId) {
+            await salvarMensagemSupabase(conversaId, 'agent', bData.text, bData.model || selectedModel);
+          }
           setIsTyping(false);
           return;
         }
       }
     } catch (_backendErr) {
-      // Backend not running, proceed to client-side API call
+      // Backend offline, faz chamada direta
     }
 
-    // 2. Direct OpenRouter API call from browser
+    // 4. Chamada direta ao OpenRouter usando as últimas 20 mensagens da memória
     if (!activeKey) {
       setIsTyping(false);
       setErrorMessage('Insira sua OpenRouter API Key no painel à direita (ex: sk-or-v1-...) para conversar ao vivo.');
@@ -250,7 +282,7 @@ export const AgenteIAChatTab: React.FC = () => {
     }
 
     try {
-      const { text: replyText, actualModel } = await callOpenRouterApi(newHistory, activeKey, selectedModel);
+      const { text: replyText, actualModel } = await callOpenRouterApi(last20FromSupabase, activeKey, selectedModel);
       
       const agentMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -259,7 +291,13 @@ export const AgenteIAChatTab: React.FC = () => {
         modelUsed: actualModel,
         timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
       };
+
       setMessages(prev => [...prev, agentMsg]);
+
+      // Grava a resposta do agente na tabela 'agente_mensagens' do Supabase
+      if (conversaId) {
+        await salvarMensagemSupabase(conversaId, 'agent', replyText, actualModel);
+      }
     } catch (err: any) {
       const errMsg = err.message || 'Erro ao comunicar com OpenRouter';
       setErrorMessage(errMsg);
@@ -280,19 +318,18 @@ export const AgenteIAChatTab: React.FC = () => {
   };
 
   const handleClearChat = () => {
-    if (window.confirm('Deseja limpar todo o histórico do Chat?')) {
+    if (window.confirm('Deseja limpar o histórico atual da tela do Chat?')) {
       const initial: ChatMessage[] = [
         {
           id: Date.now().toString(),
           sender: 'agent',
-          text: 'Chat reiniciado. Digite sua mensagem para conversar ao vivo com a Inteligência Artificial.',
+          text: 'Tela de mensagens reiniciada. O agente mantém o histórico preservado no Supabase.',
           timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
           modelUsed: selectedModel
         }
       ];
       setMessages(initial);
       setErrorMessage('');
-      localStorage.setItem('crm_agente_ia_live_chat_v6', JSON.stringify(initial));
     }
   };
 
@@ -341,7 +378,7 @@ export const AgenteIAChatTab: React.FC = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <h2 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#1e293b' }}>
-                  Agente de IA do CRM
+                  Agente de IA do CRM (Memória Supabase)
                 </h2>
                 <span 
                   style={{ 
@@ -354,12 +391,12 @@ export const AgenteIAChatTab: React.FC = () => {
                     letterSpacing: '0.5px'
                   }}
                 >
-                  NVIDIA NEMOTRON 3 ULTRA 550B (GRÁTIS)
+                  NVIDIA NEMOTRON 3 ULTRA 550B
                 </span>
               </div>
-              <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: apiKey.trim() ? '#10b981' : '#f59e0b' }}></span>
-                {apiKey.trim() ? 'Chave API Configurada (Gratuita)' : 'Aguardando Chave API do OpenRouter'}
+              <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981' }}></span>
+                Memória Supabase Conectada: <code>agente_conversas</code> & <code>agente_mensagens</code>
               </span>
             </div>
           </div>
@@ -380,10 +417,10 @@ export const AgenteIAChatTab: React.FC = () => {
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
-              title="Limpar histórico de conversas"
+              title="Limpar histórico de exibição na tela"
             >
               <FiTrash2 size={14} />
-              Limpar Chat
+              Limpar Tela
             </button>
           </div>
         </div>
@@ -441,7 +478,13 @@ export const AgenteIAChatTab: React.FC = () => {
             <FiPlay size={10} /> Testes Rápidos:
           </span>
           <button
-            onClick={() => handleApplyPreset('Olá! Quais documentos preciso enviar para fazer a análise de crédito de um imóvel?')}
+            onClick={() => handleApplyPreset('Olá! Você se lembra das informações que já conversamos anteriormente?')}
+            style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            🧠 Testar Memória
+          </button>
+          <button
+            onClick={() => handleApplyPreset('Quais documentos preciso enviar para fazer a análise de crédito de um imóvel?')}
             style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             📋 Documentos de Crédito
@@ -451,12 +494,6 @@ export const AgenteIAChatTab: React.FC = () => {
             style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             💰 Renda por Extrato
-          </button>
-          <button
-            onClick={() => handleApplyPreset('Quais são as etapas do atendimento até a assinatura do contrato?')}
-            style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-          >
-            🏦 Etapas do Atendimento
           </button>
         </div>
 
@@ -576,7 +613,7 @@ export const AgenteIAChatTab: React.FC = () => {
                   border: '1px solid #e2e8f0'
                 }}
               >
-                Gerando resposta com NVIDIA Nemotron 3 Ultra 550B...
+                Lendo últimas 20 mensagens e gerando resposta...
               </div>
             </div>
           )}
@@ -603,7 +640,7 @@ export const AgenteIAChatTab: React.FC = () => {
           <div style={{ display: 'flex', gap: '10px' }}>
             <input 
               type="text"
-              placeholder="Converse com o Agente (NVIDIA Nemotron 3 Ultra 550B)..."
+              placeholder="Converse com o Agente de IA..."
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               style={{
@@ -701,6 +738,37 @@ export const AgenteIAChatTab: React.FC = () => {
 
         {activeSideTab === 'config' ? (
           <>
+            {/* Section: Memory Tables in Supabase */}
+            <div 
+              style={{ 
+                backgroundColor: '#f0fdf4', 
+                padding: '14px', 
+                borderRadius: '8px', 
+                border: '1px solid #bbf7d0',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FiDatabase size={16} style={{ color: '#16a34a' }} />
+                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#15803d' }}>
+                  Memória Persistente (Supabase)
+                </span>
+              </div>
+              <div style={{ fontSize: '0.74rem', color: '#166534', lineHeight: '1.4' }}>
+                Tabelas ativas no Supabase:
+                <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                  <li><code>agente_conversas</code></li>
+                  <li><code>agente_mensagens</code></li>
+                </ul>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.72rem', color: '#15803d', marginTop: '4px' }}>
+                <FiClock size={12} />
+                <span>Carregando automaticamente as <strong>últimas 20 mensagens</strong> do cliente antes de cada resposta.</span>
+              </div>
+            </div>
+
             {/* Section: OpenRouter Connection */}
             <div 
               style={{ 
@@ -773,24 +841,6 @@ export const AgenteIAChatTab: React.FC = () => {
                   style={{ width: '100%' }}
                 />
               </div>
-            </div>
-
-            {/* Free model recommendation banner */}
-            <div 
-              style={{ 
-                backgroundColor: '#f0fdf4', 
-                padding: '12px', 
-                borderRadius: '8px', 
-                border: '1px solid #bbf7d0',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '8px'
-              }}
-            >
-              <FiZap size={16} style={{ color: '#16a34a', flexShrink: 0, marginTop: '2px' }} />
-              <span style={{ fontSize: '0.74rem', color: '#15803d', lineHeight: '1.4' }}>
-                <strong>Modelo Gratuito Conectado:</strong> O modelo <code>nvidia/nemotron-3-ultra-550b-a55b:free</code> é 100% gratuito e não exige nenhum saldo pago na sua chave OpenRouter!
-              </span>
             </div>
 
             {/* Architecture Summary */}
