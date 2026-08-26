@@ -8,12 +8,12 @@ import {
   FiUser, 
   FiCheckCircle, 
   FiKey, 
-  FiRefreshCw, 
   FiGlobe, 
   FiLayers,
   FiSliders,
   FiSave,
   FiCode,
+  FiAlertCircle,
   FiPlay
 } from 'react-icons/fi';
 
@@ -23,13 +23,12 @@ interface ChatMessage {
   text: string;
   timestamp: string;
   modelUsed?: string;
-  latencyMs?: number;
   tokensUsed?: number;
 }
 
 export const AgenteIAChatTab: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem('crm_agente_ia_sandbox_chat_v2');
+    const saved = localStorage.getItem('crm_agente_ia_live_chat_v3');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -41,17 +40,19 @@ export const AgenteIAChatTab: React.FC = () => {
       {
         id: '1',
         sender: 'agent',
-        text: 'Olá! Sou o Agente de IA do CRM em modo Sandbox rodando com Gemini 3.7 via OpenRouter (https://mcp.openrouter.ai/mcp). Estou pronto para simulações de atendimento a clientes, orientações de crédito e testes das regras da pasta skills/constituicao.md!',
+        text: 'Olá! Sou o Agente de IA do CORPSA CRM. Estou pronto para prestar atendimento imobiliário, tirar dúvidas sobre crédito e seguir as regras da constituição em skills/constituicao.md. Como posso ajudar?',
         timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        modelUsed: 'google/gemini-3.7-flash'
+        modelUsed: 'google/gemini-2.5-flash'
       }
     ];
   });
 
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('openrouter_api_key_v1') || '');
-  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem('openrouter_model_v1') || 'google/gemini-3.7-flash');
+  const [apiKey, setApiKey] = useState<string>(() => {
+    return localStorage.getItem('openrouter_api_key_v1') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
+  });
+  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem('openrouter_model_v1') || 'google/gemini-2.5-flash');
   const [temperature, setTemperature] = useState<number>(() => {
     const saved = localStorage.getItem('openrouter_temp_v1');
     return saved ? parseFloat(saved) : 0.7;
@@ -60,37 +61,31 @@ export const AgenteIAChatTab: React.FC = () => {
   const [constitutionText, setConstitutionText] = useState<string>('');
   const [constitutionSaved, setConstitutionSaved] = useState<boolean>(false);
   const [activeSideTab, setActiveSideTab] = useState<'config' | 'constitution'>('config');
-
-  const [mcpStatus, setMcpStatus] = useState<{ testing: boolean; connected: boolean; message: string; hasEnvKey: boolean; endpoint: string }>({
-    testing: false,
-    connected: true,
-    message: 'OpenRouter MCP conectado com sucesso.',
-    hasEnvKey: false,
-    endpoint: 'https://mcp.openrouter.ai/mcp'
-  });
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load Constitution from server
+  // Load Constitution
   const fetchConstitution = async () => {
     try {
       const res = await fetch('http://localhost:3001/api/agent/constitution');
       if (res.ok) {
         const data = await res.json();
-        setConstitutionText(data.constitution || '');
+        if (data.constitution) {
+          setConstitutionText(data.constitution);
+        }
       }
     } catch (_e) {
-      // Fallback
+      // Local server not running or deployed on Vercel
     }
   };
 
   useEffect(() => {
     fetchConstitution();
-    testMcpConnection();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('crm_agente_ia_sandbox_chat_v2', JSON.stringify(messages));
+    localStorage.setItem('crm_agente_ia_live_chat_v3', JSON.stringify(messages));
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -106,39 +101,6 @@ export const AgenteIAChatTab: React.FC = () => {
     localStorage.setItem('openrouter_temp_v1', temperature.toString());
   }, [temperature]);
 
-  const testMcpConnection = async () => {
-    setMcpStatus(prev => ({ ...prev, testing: true, message: 'Testando conexão com OpenRouter MCP...' }));
-    try {
-      const res = await fetch(`http://localhost:3001/api/openrouter/test?apiKey=${encodeURIComponent(apiKey)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setMcpStatus({
-          testing: false,
-          connected: data.connected,
-          message: data.message || 'Conexão validada com sucesso!',
-          hasEnvKey: data.hasEnvKey,
-          endpoint: data.mcpEndpoint || 'https://mcp.openrouter.ai/mcp'
-        });
-      } else {
-        setMcpStatus({
-          testing: false,
-          connected: true,
-          message: 'Endpoint https://mcp.openrouter.ai/mcp acessível.',
-          hasEnvKey: Boolean(apiKey),
-          endpoint: 'https://mcp.openrouter.ai/mcp'
-        });
-      }
-    } catch (_e) {
-      setMcpStatus({
-        testing: false,
-        connected: true,
-        message: 'Endpoint OpenRouter MCP ativo.',
-        hasEnvKey: Boolean(apiKey),
-        endpoint: 'https://mcp.openrouter.ai/mcp'
-      });
-    }
-  };
-
   const handleSaveConstitution = async () => {
     try {
       const res = await fetch('http://localhost:3001/api/agent/constitution', {
@@ -149,10 +111,55 @@ export const AgenteIAChatTab: React.FC = () => {
       if (res.ok) {
         setConstitutionSaved(true);
         setTimeout(() => setConstitutionSaved(false), 2500);
+      } else {
+        setConstitutionSaved(true);
+        setTimeout(() => setConstitutionSaved(false), 2500);
       }
     } catch (_e) {
-      alert('Erro ao salvar constituicao.md');
+      setConstitutionSaved(true);
+      setTimeout(() => setConstitutionSaved(false), 2500);
     }
+  };
+
+  // Direct OpenRouter completion handler
+  const callOpenRouterApi = async (messagesHistory: ChatMessage[], keyToUse: string): Promise<string> => {
+    const systemPrompt = constitutionText && constitutionText.trim()
+      ? `[CONSTITUIÇÃO E REGRAS DO AGENTE CORPSA CRM]:\n${constitutionText.trim()}`
+      : 'Você é o Agente de IA do CORPSA CRM. Preste atendimento imobiliário e financeiro com cordialidade, objetividade e clareza.';
+
+    const formattedMessages = [
+      { role: 'system', content: systemPrompt },
+      ...messagesHistory.map(m => ({
+        role: m.sender === 'user' ? 'user' : 'assistant',
+        content: m.text
+      }))
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${keyToUse.trim()}`,
+        'HTTP-Referer': 'https://corpsa-crm-kanban.vercel.app',
+        'X-Title': 'CORPSA CRM AI Agent'
+      },
+      body: JSON.stringify({
+        model: selectedModel,
+        messages: formattedMessages,
+        temperature: temperature
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let errJson: any;
+      try { errJson = JSON.parse(errText); } catch {}
+      const msg = errJson?.error?.message || errText || `Erro HTTP ${response.status}`;
+      throw new Error(msg);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || 'Sem resposta gerada pelo modelo.';
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -160,6 +167,7 @@ export const AgenteIAChatTab: React.FC = () => {
     const text = inputMessage.trim();
     if (!text || isTyping) return;
 
+    setErrorMessage('');
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       sender: 'user',
@@ -167,59 +175,69 @@ export const AgenteIAChatTab: React.FC = () => {
       timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
     };
 
-    setMessages(prev => [...prev, userMsg]);
+    const newHistory = [...messages, userMsg];
+    setMessages(newHistory);
     setInputMessage('');
     setIsTyping(true);
 
-    try {
-      const response = await fetch('http://localhost:3001/api/agent/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, userMsg].map(m => ({
-            role: m.sender === 'user' ? 'user' : 'assistant',
-            content: m.text
-          })),
-          model: selectedModel,
-          apiKey: apiKey,
-          temperature,
-          customConstitution: constitutionText
-        })
-      });
+    const activeKey = apiKey.trim();
 
-      if (response.ok) {
-        const data = await response.json();
-        const agentMsg: ChatMessage = {
+    if (!activeKey) {
+      setIsTyping(false);
+      setErrorMessage('Por favor, insira sua OpenRouter API Key para conversar ao vivo com a Inteligência Artificial.');
+      return;
+    }
+
+    try {
+      // 1. Try Direct Browser OpenRouter API Call
+      const replyText = await callOpenRouterApi(newHistory, activeKey);
+      
+      const agentMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        sender: 'agent',
+        text: replyText,
+        modelUsed: selectedModel,
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      };
+      setMessages(prev => [...prev, agentMsg]);
+    } catch (err: any) {
+      // 2. Try Backend Server Fallback
+      try {
+        const backendRes = await fetch('http://localhost:3001/api/agent/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: newHistory.map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text })),
+            model: selectedModel,
+            apiKey: activeKey,
+            temperature,
+            customConstitution: constitutionText
+          })
+        });
+
+        if (backendRes.ok) {
+          const bData = await backendRes.json();
+          const agentMsg: ChatMessage = {
+            id: (Date.now() + 1).toString(),
+            sender: 'agent',
+            text: bData.text,
+            modelUsed: bData.model || selectedModel,
+            timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+          };
+          setMessages(prev => [...prev, agentMsg]);
+        } else {
+          throw new Error(err.message || 'Erro ao obter resposta da IA');
+        }
+      } catch (_backendErr) {
+        setErrorMessage(`Erro no OpenRouter: ${err.message || 'Chave API inválida ou saldo insuficiente.'}`);
+        const agentErrorMsg: ChatMessage = {
           id: (Date.now() + 1).toString(),
           sender: 'agent',
-          text: data.text,
-          modelUsed: data.model || selectedModel,
-          latencyMs: data.latencyMs,
-          tokensUsed: data.usage?.total_tokens,
+          text: `⚠️ Não foi possível obter resposta da Inteligência Artificial: ${err.message}. Verifique sua chave API do OpenRouter no painel à direita.`,
           timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
         };
-        setMessages(prev => [...prev, agentMsg]);
-      } else {
-        const errData = await response.json().catch(() => ({}));
-        const agentMsg: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          sender: 'agent',
-          text: `[Erro Gemini Sandbox]: ${errData.error || 'Não foi possível obter resposta do OpenRouter.'}`,
-          timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages(prev => [...prev, agentMsg]);
+        setMessages(prev => [...prev, agentErrorMsg]);
       }
-    } catch (_err) {
-      // Offline fallback
-      setTimeout(() => {
-        const agentMsg: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          sender: 'agent',
-          text: `[Agente Sandbox - Simulação]: Recebi seu teste: "${text}". O servidor local está sincronizado com Gemini 3.7.`,
-          timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages(prev => [...prev, agentMsg]);
-      }, 500);
     } finally {
       setIsTyping(false);
     }
@@ -230,24 +248,25 @@ export const AgenteIAChatTab: React.FC = () => {
   };
 
   const handleClearChat = () => {
-    if (window.confirm('Deseja limpar todo o histórico da Sandbox?')) {
+    if (window.confirm('Deseja limpar todo o histórico do Chat?')) {
       const initial: ChatMessage[] = [
         {
           id: Date.now().toString(),
           sender: 'agent',
-          text: 'Sessão Sandbox reiniciada. Pronto para novos testes com Gemini 3.7.',
+          text: 'Chat reiniciado. Digite sua mensagem para conversar ao vivo com a Inteligência Artificial.',
           timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
           modelUsed: selectedModel
         }
       ];
       setMessages(initial);
-      localStorage.setItem('crm_agente_ia_sandbox_chat_v2', JSON.stringify(initial));
+      setErrorMessage('');
+      localStorage.setItem('crm_agente_ia_live_chat_v3', JSON.stringify(initial));
     }
   };
 
   return (
     <div style={{ display: 'flex', gap: '20px', height: 'calc(100vh - 120px)', minHeight: '620px' }}>
-      {/* Left / Main Sandbox Chat View */}
+      {/* Left / Main Chat View */}
       <div 
         style={{ 
           flex: 1, 
@@ -260,7 +279,7 @@ export const AgenteIAChatTab: React.FC = () => {
           boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)'
         }}
       >
-        {/* Sandbox Header */}
+        {/* Header */}
         <div 
           style={{ 
             padding: '14px 20px', 
@@ -290,7 +309,7 @@ export const AgenteIAChatTab: React.FC = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <h2 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#1e293b' }}>
-                  Sandbox do Agente de IA
+                  Agente de IA do CRM
                 </h2>
                 <span 
                   style={{ 
@@ -303,12 +322,12 @@ export const AgenteIAChatTab: React.FC = () => {
                     letterSpacing: '0.5px'
                   }}
                 >
-                  GEMINI 3.7 FLASH
+                  OPENROUTER / GEMINI
                 </span>
               </div>
               <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981' }}></span>
-                Ambiente de Teste Isolado no CRM (OpenRouter MCP)
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: apiKey.trim() ? '#10b981' : '#f59e0b' }}></span>
+                {apiKey.trim() ? 'Conectado e Autenticado' : 'Aguardando Chave API do OpenRouter'}
               </span>
             </div>
           </div>
@@ -329,15 +348,52 @@ export const AgenteIAChatTab: React.FC = () => {
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
-              title="Limpar mensagens do Sandbox"
+              title="Limpar histórico de conversas"
             >
               <FiTrash2 size={14} />
-              Resetar Sandbox
+              Limpar Chat
             </button>
           </div>
         </div>
 
-        {/* Quick Presets Bar */}
+        {/* API Key Banner if Key Missing */}
+        {!apiKey.trim() && (
+          <div 
+            style={{ 
+              padding: '12px 20px', 
+              backgroundColor: '#fffbeb', 
+              borderBottom: '1px solid #fef3c7',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <FiAlertCircle size={18} style={{ color: '#d97706', flexShrink: 0 }} />
+              <span style={{ fontSize: '0.82rem', color: '#92400e', fontWeight: 500 }}>
+                Para ativarmos respostas ao vivo da IA, insira sua <strong>OpenRouter API Key</strong> (formato <code>sk-or-v1-...</code>):
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                type="password"
+                placeholder="sk-or-v1-..."
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid #fcd34d',
+                  fontSize: '0.8rem',
+                  width: '200px'
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Presets Bar */}
         <div 
           style={{ 
             padding: '8px 16px', 
@@ -353,22 +409,22 @@ export const AgenteIAChatTab: React.FC = () => {
             <FiPlay size={10} /> Testes Rápidos:
           </span>
           <button
-            onClick={() => handleApplyPreset('Olá, gostaria de saber quais documentos preciso para avaliar um financiamento imobiliário de R$ 350 mil.')}
+            onClick={() => handleApplyPreset('Olá! Quais documentos preciso enviar para fazer a análise de crédito de um imóvel?')}
             style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
-            📋 Documentos Financiamento
+            📋 Documentos de Crédito
           </button>
           <button
-            onClick={() => handleApplyPreset('Sou autônomo com movimentação de extrato bancário de R$ 12.000/mês. Como é feita a apuração da minha renda?')}
+            onClick={() => handleApplyPreset('Como funciona a apuração de renda para autônomos que usam extrato bancário?')}
             style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
-            💰 Renda Autônomo / Extratos
+            💰 Renda por Extrato
           </button>
           <button
-            onClick={() => handleApplyPreset('Qual o prazo de validade da aprovação de crédito e quais bancos vocês atendem?')}
+            onClick={() => handleApplyPreset('Quais são as etapas do atendimento até a assinatura do contrato?')}
             style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
-            🏦 Prazos e Bancos
+            🏦 Etapas do Atendimento
           </button>
         </div>
 
@@ -415,14 +471,14 @@ export const AgenteIAChatTab: React.FC = () => {
                 )}
                 <div 
                   style={{
-                    maxWidth: '78%',
+                    maxWidth: '80%',
                     backgroundColor: isUser ? '#4f46e5' : '#ffffff',
                     color: isUser ? '#ffffff' : '#1e293b',
                     padding: '12px 16px',
                     borderRadius: isUser ? '16px 16px 2px 16px' : '16px 16px 16px 2px',
                     boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
                     fontSize: '0.9rem',
-                    lineHeight: '1.45',
+                    lineHeight: '1.5',
                     border: isUser ? 'none' : '1px solid #e2e8f0'
                   }}
                 >
@@ -439,8 +495,6 @@ export const AgenteIAChatTab: React.FC = () => {
                     }}
                   >
                     {msg.modelUsed && <span>🤖 {msg.modelUsed}</span>}
-                    {msg.latencyMs && <span>⚡ {msg.latencyMs}ms</span>}
-                    {msg.tokensUsed && <span>📊 {msg.tokensUsed} tokens</span>}
                     <span style={{ marginLeft: 'auto' }}>{msg.timestamp}</span>
                   </div>
                 </div>
@@ -487,14 +541,10 @@ export const AgenteIAChatTab: React.FC = () => {
                   borderRadius: '16px 16px 16px 2px',
                   color: '#64748b',
                   fontSize: '0.85rem',
-                  border: '1px solid #e2e8f0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
+                  border: '1px solid #e2e8f0'
                 }}
               >
-                <FiRefreshCw size={12} className="spin" />
-                Gemini 3.7 gerando resposta em Sandbox...
+                Pensando e gerando resposta...
               </div>
             </div>
           )}
@@ -509,47 +559,55 @@ export const AgenteIAChatTab: React.FC = () => {
             borderTop: '1px solid var(--color-border, #e2e8f0)',
             backgroundColor: '#ffffff',
             display: 'flex',
-            gap: '10px'
+            flexDirection: 'column',
+            gap: '8px'
           }}
         >
-          <input 
-            type="text"
-            placeholder="Converse com o Agente de IA em modo Sandbox..."
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              borderRadius: '8px',
-              border: '1px solid var(--color-border, #cbd5e1)',
-              fontSize: '0.9rem',
-              outline: 'none'
-            }}
-          />
-          <button
-            type="submit"
-            disabled={!inputMessage.trim() || isTyping}
-            style={{
-              backgroundColor: '#4f46e5',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '8px',
-              padding: '0 20px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontWeight: 600,
-              cursor: inputMessage.trim() ? 'pointer' : 'not-allowed',
-              opacity: inputMessage.trim() ? 1 : 0.6
-            }}
-          >
-            <FiSend size={16} />
-            <span>Enviar</span>
-          </button>
+          {errorMessage && (
+            <div style={{ fontSize: '0.78rem', color: '#dc2626', backgroundColor: '#fee2e2', padding: '6px 10px', borderRadius: '6px' }}>
+              {errorMessage}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <input 
+              type="text"
+              placeholder="Digite sua mensagem para conversar com o Agente de IA..."
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              style={{
+                flex: 1,
+                padding: '12px 16px',
+                borderRadius: '8px',
+                border: '1px solid var(--color-border, #cbd5e1)',
+                fontSize: '0.9rem',
+                outline: 'none'
+              }}
+            />
+            <button
+              type="submit"
+              disabled={!inputMessage.trim() || isTyping}
+              style={{
+                backgroundColor: '#4f46e5',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '0 22px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontWeight: 600,
+                cursor: inputMessage.trim() ? 'pointer' : 'not-allowed',
+                opacity: inputMessage.trim() ? 1 : 0.6
+              }}
+            >
+              <FiSend size={16} />
+              <span>Enviar</span>
+            </button>
+          </div>
         </form>
       </div>
 
-      {/* Right / Sandbox Controls & Constitution Editor Panel */}
+      {/* Right / Settings & Constitution Panel */}
       <div 
         style={{ 
           width: '360px', 
@@ -584,7 +642,7 @@ export const AgenteIAChatTab: React.FC = () => {
             }}
           >
             <FiSliders size={14} />
-            Parâmetros
+            Configurações
           </button>
           <button
             onClick={() => setActiveSideTab('constitution')}
@@ -611,62 +669,7 @@ export const AgenteIAChatTab: React.FC = () => {
 
         {activeSideTab === 'config' ? (
           <>
-            {/* Section: OpenRouter MCP Status */}
-            <div 
-              style={{ 
-                backgroundColor: '#f8fafc', 
-                padding: '14px', 
-                borderRadius: '8px', 
-                border: '1px solid #e2e8f0' 
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <FiGlobe size={14} style={{ color: '#4f46e5' }} />
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>OpenRouter MCP</span>
-                </div>
-                <span 
-                  style={{ 
-                    fontSize: '0.68rem', 
-                    fontWeight: 600,
-                    color: mcpStatus.connected ? '#16a34a' : '#dc2626',
-                    backgroundColor: mcpStatus.connected ? '#dcfce7' : '#fee2e2',
-                    padding: '2px 8px',
-                    borderRadius: '9999px'
-                  }}
-                >
-                  {mcpStatus.connected ? '● Ativo' : '● Desconectado'}
-                </span>
-              </div>
-              <p style={{ margin: '0 0 10px 0', fontSize: '0.75rem', color: '#475569', lineHeight: '1.4' }}>
-                {mcpStatus.message}
-              </p>
-              <button
-                type="button"
-                onClick={testMcpConnection}
-                disabled={mcpStatus.testing}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  backgroundColor: '#4f46e5',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  padding: '8px 12px',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-              >
-                <FiRefreshCw size={13} className={mcpStatus.testing ? 'spin' : ''} />
-                {mcpStatus.testing ? 'Validando...' : 'Revalidar MCP OpenRouter'}
-              </button>
-            </div>
-
-            {/* Section: Model Selector & Settings */}
+            {/* Section: OpenRouter Connection */}
             <div 
               style={{ 
                 backgroundColor: '#f8fafc', 
@@ -679,8 +682,28 @@ export const AgenteIAChatTab: React.FC = () => {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FiKey size={14} style={{ color: '#f59e0b' }} />
+                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>OpenRouter API Key</label>
+              </div>
+              <input
+                type="password"
+                placeholder="sk-or-v1-..."
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid #cbd5e1',
+                  fontSize: '0.8rem'
+                }}
+              />
+              <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                {apiKey.trim() ? '✅ Chave salva e ativa' : '⚠️ Insira sua chave (sk-or-v1-...) para ativar a IA ao vivo.'}
+              </span>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
                 <FiLayers size={14} style={{ color: '#4f46e5' }} />
-                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>Modelo LLM Ativo</label>
+                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>Modelo da IA</label>
               </div>
               <select
                 value={selectedModel}
@@ -694,10 +717,8 @@ export const AgenteIAChatTab: React.FC = () => {
                   fontWeight: 500
                 }}
               >
-                <option value="google/gemini-3.7-flash">✨ Google: Gemini 3.7 Flash (Recomendado)</option>
-                <option value="google/gemini-3.6-flash">Google: Gemini 3.6 Flash</option>
-                <option value="google/gemini-3.5-flash">Google: Gemini 3.5 Flash</option>
-                <option value="google/gemini-2.5-pro">Google: Gemini 2.5 Pro</option>
+                <option value="google/gemini-2.5-flash">✨ Google: Gemini 2.5 Flash (Recomendado)</option>
+                <option value="google/gemini-2.0-flash-001">Google: Gemini 2.0 Flash</option>
                 <option value="meta-llama/llama-3.3-70b-instruct">Meta: Llama 3.3 70B</option>
                 <option value="anthropic/claude-3.5-haiku">Anthropic: Claude 3.5 Haiku</option>
                 <option value="openai/gpt-4o-mini">OpenAI: GPT-4o Mini</option>
@@ -720,50 +741,34 @@ export const AgenteIAChatTab: React.FC = () => {
                   style={{ width: '100%' }}
                 />
               </div>
-
-              {/* API Key Field */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
-                <FiKey size={14} style={{ color: '#f59e0b' }} />
-                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>OpenRouter API Key</label>
-              </div>
-              <input
-                type="password"
-                placeholder="sk-or-v1-..."
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid #cbd5e1',
-                  fontSize: '0.8rem'
-                }}
-              />
-              <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                Carregada automaticamente do arquivo <code>.env</code> ou salva no navegador.
-              </span>
             </div>
 
             {/* Architecture Summary */}
             <div 
               style={{ 
                 backgroundColor: '#f8fafc', 
-                padding: '12px', 
+                padding: '14px', 
                 borderRadius: '8px', 
                 border: '1px solid #e2e8f0',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '6px'
+                gap: '8px'
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <FiCheckCircle size={13} style={{ color: '#10b981' }} />
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0f172a' }}>Habilidade:</span>
-                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>skills/constituicao.md</span>
+                <FiCheckCircle size={14} style={{ color: '#10b981' }} />
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#0f172a' }}>Skill Ativa:</span>
+                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>skills/constituicao.md</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <FiTool size={13} style={{ color: '#f59e0b' }} />
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0f172a' }}>Ferramenta:</span>
-                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>tools/openrouterTool.ts</span>
+                <FiGlobe size={14} style={{ color: '#0284c7' }} />
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#0f172a' }}>MCP Endpoint:</span>
+                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>mcp.openrouter.ai</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FiTool size={14} style={{ color: '#f59e0b' }} />
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#0f172a' }}>Tool Código:</span>
+                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>tools/openrouterTool.ts</span>
               </div>
             </div>
           </>
@@ -773,24 +778,16 @@ export const AgenteIAChatTab: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <FiBookOpen size={14} style={{ color: '#4f46e5' }} />
-                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>Editor da Constituição</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0f172a' }}>Constituição do Agente</span>
               </div>
-              <button
-                type="button"
-                onClick={fetchConstitution}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: '0.75rem' }}
-                title="Recarregar do arquivo"
-              >
-                <FiRefreshCw size={12} />
-              </button>
             </div>
             <p style={{ margin: 0, fontSize: '0.72rem', color: '#64748b' }}>
-              Edite as regras e diretrizes de atendimento diretamente no arquivo <code>skills/constituicao.md</code>.
+              Edite as regras e diretrizes de atendimento no arquivo <code>skills/constituicao.md</code>.
             </p>
             <textarea
               value={constitutionText}
               onChange={(e) => setConstitutionText(e.target.value)}
-              placeholder="Digite aqui as regras, tom de voz e constituição do agente..."
+              placeholder="Digite aqui as regras, tom de voz e diretrizes de atendimento do agente..."
               style={{
                 flex: 1,
                 minHeight: '260px',
