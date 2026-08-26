@@ -3,6 +3,7 @@ import { supabase } from './supabaseClient';
 import { parseRawText, isValidCpf } from './utils/parser';
 import { isLeadSLAOverdue, isPendenciaSLAOverdue } from './utils/sla';
 import { ApuracaoRendaTab } from './components/ApuracaoRendaTab';
+import { AgenteIAChatTab } from './components/AgenteIAChatTab';
 import type { Session } from '@supabase/supabase-js';
 import { 
   FiPlus, 
@@ -24,7 +25,8 @@ import {
   FiCheckSquare,
   FiTrash2,
   FiMinimize2,
-  FiClock
+  FiClock,
+  FiCpu
 } from 'react-icons/fi';
 
 interface Lead {
@@ -57,7 +59,7 @@ const COLUMNS = [
 function App() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentTab, setCurrentTab] = useState<'kanban' | 'dashboard' | 'apuracao_renda'>('kanban');
+  const [currentTab, setCurrentTab] = useState<'kanban' | 'dashboard' | 'apuracao_renda' | 'agente_ia'>('kanban');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Authentication State
@@ -1333,6 +1335,14 @@ function App() {
             <FiFileText size={18} />
             Apuração de Renda
           </button>
+          <button 
+            className={`nav-item ${currentTab === 'agente_ia' ? 'active' : ''}`}
+            onClick={() => setCurrentTab('agente_ia')}
+            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}
+          >
+            <FiCpu size={18} />
+            Agente de IA (Chat Teste)
+          </button>
         </div>
 
         <div className="sidebar-footer">
@@ -1478,6 +1488,8 @@ function App() {
                 </div>
               </div>
             </>
+          ) : currentTab === 'agente_ia' ? (
+            <AgenteIAChatTab />
           ) : currentTab === 'apuracao_renda' ? (
             <ApuracaoRendaTab />
           ) : (
