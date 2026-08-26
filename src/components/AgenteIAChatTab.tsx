@@ -28,7 +28,7 @@ interface ChatMessage {
 
 export const AgenteIAChatTab: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem('crm_agente_ia_live_chat_v3');
+    const saved = localStorage.getItem('crm_agente_ia_live_chat_v4');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -76,7 +76,7 @@ export const AgenteIAChatTab: React.FC = () => {
         }
       }
     } catch (_e) {
-      // Local server not running or deployed on Vercel
+      // Server offline or deployed on Vercel
     }
   };
 
@@ -85,7 +85,7 @@ export const AgenteIAChatTab: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('crm_agente_ia_live_chat_v3', JSON.stringify(messages));
+    localStorage.setItem('crm_agente_ia_live_chat_v4', JSON.stringify(messages));
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -135,11 +135,16 @@ export const AgenteIAChatTab: React.FC = () => {
       }))
     ];
 
+    const cleanKey = keyToUse.trim();
+    if (!cleanKey) {
+      throw new Error('Chave API não configurada.');
+    }
+
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${keyToUse.trim()}`,
+        'Authorization': `Bearer ${cleanKey}`,
         'HTTP-Referer': 'https://corpsa-crm-kanban.vercel.app',
         'X-Title': 'CORPSA CRM AI Agent'
       },
@@ -182,14 +187,47 @@ export const AgenteIAChatTab: React.FC = () => {
 
     const activeKey = apiKey.trim();
 
+    // 1. Try local server bridge first (reads OPENROUTER_API_KEY from .env directly)
+    try {
+      const backendRes = await fetch('http://localhost:3001/api/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: newHistory.map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text })),
+          model: selectedModel,
+          apiKey: activeKey,
+          temperature,
+          customConstitution: constitutionText
+        })
+      });
+
+      if (backendRes.ok) {
+        const bData = await backendRes.json();
+        if (bData.success && bData.text) {
+          const agentMsg: ChatMessage = {
+            id: (Date.now() + 1).toString(),
+            sender: 'agent',
+            text: bData.text,
+            modelUsed: bData.model || selectedModel,
+            timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+          };
+          setMessages(prev => [...prev, agentMsg]);
+          setIsTyping(false);
+          return;
+        }
+      }
+    } catch (_backendErr) {
+      // Backend not running, proceed to client-side API call
+    }
+
+    // 2. Direct OpenRouter API call from client browser
     if (!activeKey) {
       setIsTyping(false);
-      setErrorMessage('Por favor, insira sua OpenRouter API Key para conversar ao vivo com a Inteligência Artificial.');
+      setErrorMessage('Insira sua OpenRouter API Key no painel à direita (ex: sk-or-v1-...) para ativar a IA ao vivo.');
       return;
     }
 
     try {
-      // 1. Try Direct Browser OpenRouter API Call
       const replyText = await callOpenRouterApi(newHistory, activeKey);
       
       const agentMsg: ChatMessage = {
@@ -201,43 +239,15 @@ export const AgenteIAChatTab: React.FC = () => {
       };
       setMessages(prev => [...prev, agentMsg]);
     } catch (err: any) {
-      // 2. Try Backend Server Fallback
-      try {
-        const backendRes = await fetch('http://localhost:3001/api/agent/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: newHistory.map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text })),
-            model: selectedModel,
-            apiKey: activeKey,
-            temperature,
-            customConstitution: constitutionText
-          })
-        });
-
-        if (backendRes.ok) {
-          const bData = await backendRes.json();
-          const agentMsg: ChatMessage = {
-            id: (Date.now() + 1).toString(),
-            sender: 'agent',
-            text: bData.text,
-            modelUsed: bData.model || selectedModel,
-            timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-          };
-          setMessages(prev => [...prev, agentMsg]);
-        } else {
-          throw new Error(err.message || 'Erro ao obter resposta da IA');
-        }
-      } catch (_backendErr) {
-        setErrorMessage(`Erro no OpenRouter: ${err.message || 'Chave API inválida ou saldo insuficiente.'}`);
-        const agentErrorMsg: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          sender: 'agent',
-          text: `⚠️ Não foi possível obter resposta da Inteligência Artificial: ${err.message}. Verifique sua chave API do OpenRouter no painel à direita.`,
-          timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages(prev => [...prev, agentErrorMsg]);
-      }
+      const errMsg = err.message || 'Chave API inválida ou sem saldo';
+      setErrorMessage(`Erro no OpenRouter: ${errMsg}`);
+      const agentErrorMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        sender: 'agent',
+        text: `⚠️ Erro ao autenticar no OpenRouter (${errMsg}). Insira uma chave API válida (sk-or-v1-...) no painel de configurações à direita.`,
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      };
+      setMessages(prev => [...prev, agentErrorMsg]);
     } finally {
       setIsTyping(false);
     }
@@ -260,7 +270,7 @@ export const AgenteIAChatTab: React.FC = () => {
       ];
       setMessages(initial);
       setErrorMessage('');
-      localStorage.setItem('crm_agente_ia_live_chat_v3', JSON.stringify(initial));
+      localStorage.setItem('crm_agente_ia_live_chat_v4', JSON.stringify(initial));
     }
   };
 
@@ -327,7 +337,7 @@ export const AgenteIAChatTab: React.FC = () => {
               </div>
               <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: apiKey.trim() ? '#10b981' : '#f59e0b' }}></span>
-                {apiKey.trim() ? 'Conectado e Autenticado' : 'Aguardando Chave API do OpenRouter'}
+                {apiKey.trim() ? 'Chave API Configurada' : 'Aguardando Chave API do OpenRouter'}
               </span>
             </div>
           </div>
@@ -386,7 +396,7 @@ export const AgenteIAChatTab: React.FC = () => {
                   borderRadius: '6px',
                   border: '1px solid #fcd34d',
                   fontSize: '0.8rem',
-                  width: '200px'
+                  width: '220px'
                 }}
               />
             </div>
@@ -697,8 +707,8 @@ export const AgenteIAChatTab: React.FC = () => {
                   fontSize: '0.8rem'
                 }}
               />
-              <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                {apiKey.trim() ? '✅ Chave salva e ativa' : '⚠️ Insira sua chave (sk-or-v1-...) para ativar a IA ao vivo.'}
+              <span style={{ fontSize: '0.7rem', color: apiKey.trim() ? '#16a34a' : '#d97706' }}>
+                {apiKey.trim() ? '✅ Chave inserida' : '⚠️ Insira sua chave (sk-or-v1-...) para ativar o chat ao vivo.'}
               </span>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
