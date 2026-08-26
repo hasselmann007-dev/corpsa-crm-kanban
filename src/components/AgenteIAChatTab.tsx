@@ -14,7 +14,8 @@ import {
   FiSave,
   FiCode,
   FiAlertCircle,
-  FiPlay
+  FiPlay,
+  FiZap
 } from 'react-icons/fi';
 
 interface ChatMessage {
@@ -28,7 +29,7 @@ interface ChatMessage {
 
 export const AgenteIAChatTab: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const saved = localStorage.getItem('crm_agente_ia_live_chat_v4');
+    const saved = localStorage.getItem('crm_agente_ia_live_chat_v5');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -42,7 +43,7 @@ export const AgenteIAChatTab: React.FC = () => {
         sender: 'agent',
         text: 'Olá! Sou o Agente de IA do CORPSA CRM. Estou pronto para prestar atendimento imobiliário, tirar dúvidas sobre crédito e seguir as regras da constituição em skills/constituicao.md. Como posso ajudar?',
         timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        modelUsed: 'google/gemini-2.5-flash'
+        modelUsed: 'google/gemini-3.6-flash'
       }
     ];
   });
@@ -52,7 +53,7 @@ export const AgenteIAChatTab: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>(() => {
     return localStorage.getItem('openrouter_api_key_v1') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
   });
-  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem('openrouter_model_v1') || 'google/gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState<string>(() => localStorage.getItem('openrouter_model_v1') || 'google/gemini-3.6-flash');
   const [temperature, setTemperature] = useState<number>(() => {
     const saved = localStorage.getItem('openrouter_temp_v1');
     return saved ? parseFloat(saved) : 0.7;
@@ -76,7 +77,7 @@ export const AgenteIAChatTab: React.FC = () => {
         }
       }
     } catch (_e) {
-      // Server offline or deployed on Vercel
+      // Server offline or on Vercel
     }
   };
 
@@ -85,7 +86,7 @@ export const AgenteIAChatTab: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('crm_agente_ia_live_chat_v4', JSON.stringify(messages));
+    localStorage.setItem('crm_agente_ia_live_chat_v5', JSON.stringify(messages));
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -121,8 +122,8 @@ export const AgenteIAChatTab: React.FC = () => {
     }
   };
 
-  // Direct OpenRouter completion handler
-  const callOpenRouterApi = async (messagesHistory: ChatMessage[], keyToUse: string): Promise<string> => {
+  // Direct OpenRouter completion handler with automatic free model fallback
+  const callOpenRouterApi = async (messagesHistory: ChatMessage[], keyToUse: string, modelToUse: string): Promise<{ text: string; actualModel: string }> => {
     const systemPrompt = constitutionText && constitutionText.trim()
       ? `[CONSTITUIÇÃO E REGRAS DO AGENTE CORPSA CRM]:\n${constitutionText.trim()}`
       : 'Você é o Agente de IA do CORPSA CRM. Preste atendimento imobiliário e financeiro com cordialidade, objetividade e clareza.';
@@ -140,31 +141,52 @@ export const AgenteIAChatTab: React.FC = () => {
       throw new Error('Chave API não configurada.');
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${cleanKey}`,
-        'HTTP-Referer': 'https://corpsa-crm-kanban.vercel.app',
-        'X-Title': 'CORPSA CRM AI Agent'
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages: formattedMessages,
-        temperature: temperature
-      })
-    });
+    const tryRequest = async (targetModel: string) => {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${cleanKey}`,
+          'HTTP-Referer': 'https://corpsa-crm-kanban.vercel.app',
+          'X-Title': 'CORPSA CRM AI Agent'
+        },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: formattedMessages,
+          temperature: temperature
+        })
+      });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      let errJson: any;
-      try { errJson = JSON.parse(errText); } catch {}
-      const msg = errJson?.error?.message || errText || `Erro HTTP ${response.status}`;
-      throw new Error(msg);
+      if (!response.ok) {
+        const errText = await response.text();
+        let errJson: any;
+        try { errJson = JSON.parse(errText); } catch {}
+        const msg = errJson?.error?.message || errText || `Erro HTTP ${response.status}`;
+        throw new Error(msg);
+      }
+
+      const data = await response.json();
+      return {
+        text: data.choices?.[0]?.message?.content || 'Sem resposta gerada pelo modelo.',
+        actualModel: data.model || targetModel
+      };
+    };
+
+    try {
+      return await tryRequest(modelToUse);
+    } catch (err: any) {
+      const errStr = (err.message || '').toLowerCase();
+      // If user gets Insufficient credits error, automatically fallback to openrouter/free model
+      if ((errStr.includes('insufficient credits') || errStr.includes('never purchased credits')) && modelToUse !== 'openrouter/free') {
+        console.warn('Créditos insuficientes no modelo pago. Redirecionando para openrouter/free...');
+        const freeResult = await tryRequest('openrouter/free');
+        return {
+          text: `${freeResult.text}\n\n*(Nota: Resposta gerada via modelo gratuito openrouter/free pois a chave atual não possui créditos pagos).*`,
+          actualModel: 'openrouter/free (Grátis)'
+        };
+      }
+      throw err;
     }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || 'Sem resposta gerada pelo modelo.';
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -220,31 +242,31 @@ export const AgenteIAChatTab: React.FC = () => {
       // Backend not running, proceed to client-side API call
     }
 
-    // 2. Direct OpenRouter API call from client browser
+    // 2. Direct OpenRouter API call from browser
     if (!activeKey) {
       setIsTyping(false);
-      setErrorMessage('Insira sua OpenRouter API Key no painel à direita (ex: sk-or-v1-...) para ativar a IA ao vivo.');
+      setErrorMessage('Insira sua OpenRouter API Key no painel à direita (ex: sk-or-v1-...) para conversar ao vivo.');
       return;
     }
 
     try {
-      const replyText = await callOpenRouterApi(newHistory, activeKey);
+      const { text: replyText, actualModel } = await callOpenRouterApi(newHistory, activeKey, selectedModel);
       
       const agentMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: 'agent',
         text: replyText,
-        modelUsed: selectedModel,
+        modelUsed: actualModel,
         timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, agentMsg]);
     } catch (err: any) {
-      const errMsg = err.message || 'Chave API inválida ou sem saldo';
-      setErrorMessage(`Erro no OpenRouter: ${errMsg}`);
+      const errMsg = err.message || 'Erro ao comunicar com OpenRouter';
+      setErrorMessage(errMsg);
       const agentErrorMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: 'agent',
-        text: `⚠️ Erro ao autenticar no OpenRouter (${errMsg}). Insira uma chave API válida (sk-or-v1-...) no painel de configurações à direita.`,
+        text: `⚠️ Erro no OpenRouter: ${errMsg}\n\nDica: Se sua conta não possui créditos pagos, selecione o modelo "openrouter/free (Grátis)" no menu à direita.`,
         timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, agentErrorMsg]);
@@ -270,7 +292,7 @@ export const AgenteIAChatTab: React.FC = () => {
       ];
       setMessages(initial);
       setErrorMessage('');
-      localStorage.setItem('crm_agente_ia_live_chat_v4', JSON.stringify(initial));
+      localStorage.setItem('crm_agente_ia_live_chat_v5', JSON.stringify(initial));
     }
   };
 
@@ -332,7 +354,7 @@ export const AgenteIAChatTab: React.FC = () => {
                     letterSpacing: '0.5px'
                   }}
                 >
-                  OPENROUTER / GEMINI
+                  GEMINI 3.6 FLASH
                 </span>
               </div>
               <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
@@ -554,7 +576,7 @@ export const AgenteIAChatTab: React.FC = () => {
                   border: '1px solid #e2e8f0'
                 }}
               >
-                Pensando e gerando resposta...
+                Gerando resposta com Gemini 3.6 Flash...
               </div>
             </div>
           )}
@@ -581,7 +603,7 @@ export const AgenteIAChatTab: React.FC = () => {
           <div style={{ display: 'flex', gap: '10px' }}>
             <input 
               type="text"
-              placeholder="Digite sua mensagem para conversar com o Agente de IA..."
+              placeholder="Converse com o Agente (Gemini 3.6 Flash)..."
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               style={{
@@ -724,15 +746,16 @@ export const AgenteIAChatTab: React.FC = () => {
                   border: '1px solid #cbd5e1',
                   fontSize: '0.8rem',
                   backgroundColor: '#ffffff',
-                  fontWeight: 500
+                  fontWeight: 600
                 }}
               >
-                <option value="google/gemini-2.5-flash">✨ Google: Gemini 2.5 Flash (Recomendado)</option>
-                <option value="google/gemini-2.0-flash-001">Google: Gemini 2.0 Flash</option>
+                <option value="google/gemini-3.6-flash">⚡ Google: Gemini 3.6 Flash (Selecionado)</option>
+                <option value="openrouter/free">💡 openrouter/free (Grátis - Sem Créditos)</option>
+                <option value="google/gemini-2.5-flash">Google: Gemini 2.5 Flash</option>
+                <option value="google/gemini-3.7-flash">Google: Gemini 3.7 Flash</option>
+                <option value="google/gemini-2.5-pro">Google: Gemini 2.5 Pro</option>
                 <option value="meta-llama/llama-3.3-70b-instruct">Meta: Llama 3.3 70B</option>
                 <option value="anthropic/claude-3.5-haiku">Anthropic: Claude 3.5 Haiku</option>
-                <option value="openai/gpt-4o-mini">OpenAI: GPT-4o Mini</option>
-                <option value="deepseek/deepseek-chat">DeepSeek: DeepSeek V3</option>
               </select>
 
               {/* Temperature Slider */}
@@ -751,6 +774,24 @@ export const AgenteIAChatTab: React.FC = () => {
                   style={{ width: '100%' }}
                 />
               </div>
+            </div>
+
+            {/* Free model recommendation alert if user has zero credits */}
+            <div 
+              style={{ 
+                backgroundColor: '#eff6ff', 
+                padding: '12px', 
+                borderRadius: '8px', 
+                border: '1px solid #bfdbfe',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '8px'
+              }}
+            >
+              <FiZap size={16} style={{ color: '#2563eb', flexShrink: 0, marginTop: '2px' }} />
+              <span style={{ fontSize: '0.74rem', color: '#1e40af', lineHeight: '1.4' }}>
+                <strong>Dica para contas sem créditos pagos:</strong> Se sua chave OpenRouter for nova e sem saldo, selecione a opção <code>openrouter/free (Grátis)</code> no menu de modelos para conversar sem restrição de saldo!
+              </span>
             </div>
 
             {/* Architecture Summary */}
