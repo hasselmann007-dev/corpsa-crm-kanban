@@ -137,7 +137,7 @@ app.post('/api/nlm/analyze', upload.array('files'), async (req, res) => {
   }
 });
 
-import { testOpenRouterMcp, chatWithOpenRouter, getAgentConstitution, saveAgentConstitution } from '../tools/openrouterTool.js';
+import { testOpenRouterMcp, chatWithOpenRouter, getAgentConstitution, saveAgentConstitution, getAgentPromptCrm, saveAgentPromptCrm } from '../tools/openrouterTool.js';
 
 /**
  * GET /api/openrouter/test
@@ -181,6 +181,37 @@ app.post('/api/agent/constitution', (req, res) => {
       return;
     }
     const success = saveAgentConstitution(content);
+    res.json({ success });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/agent/prompt-agentcrm
+ * Read current prompt-agentcrm.md
+ */
+app.get('/api/agent/prompt-agentcrm', (_req, res) => {
+  try {
+    const prompt = getAgentPromptCrm();
+    res.json({ success: true, prompt });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/agent/prompt-agentcrm
+ * Update prompt-agentcrm.md
+ */
+app.post('/api/agent/prompt-agentcrm', (req, res) => {
+  try {
+    const { content } = req.body;
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: 'Conteúdo deve ser uma string' });
+      return;
+    }
+    const success = saveAgentPromptCrm(content);
     res.json({ success });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });

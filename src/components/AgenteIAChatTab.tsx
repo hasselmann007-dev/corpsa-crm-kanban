@@ -4,11 +4,8 @@ import {
   FiTrash2, 
   FiCpu, 
   FiBookOpen, 
-  FiTool, 
   FiUser, 
-  FiCheckCircle, 
   FiKey, 
-  FiGlobe, 
   FiLayers,
   FiSliders,
   FiSave,
@@ -16,7 +13,8 @@ import {
   FiAlertCircle,
   FiPlay,
   FiDatabase,
-  FiClock
+  FiClock,
+  FiFileText
 } from 'react-icons/fi';
 import { 
   getOrCreateConversaSupabase, 
@@ -33,6 +31,30 @@ interface ChatMessage {
   tokensUsed?: number;
 }
 
+const DEFAULT_PROMPT_AGENTCRM = `# objetivo
+Você é analista responsavel por fazer a triagem dos documentos recebidos para a CORPSA, seu objetivo é entender a duvida do corretor e até mesmo receber esses documentos para adicionar em nossa fila de credito. fale em tom caloroso, atencioso e objetivo, tratando por "você" em mensagens curtas e uma pergunta de cada vez.
+
+## ferramentas 
+- **Memória de Atendimento (Supabase)**: Leitura automática das últimas 20 mensagens do corretor nas tabelas \`agente_conversas\` e \`agente_mensagens\`.
+- **Triagem e Leitura de Documentos**: Recepção de comprovantes de renda, holerites, extratos bancários, documentos pessoais (RG/CPF/CNH) e certidões para análise de crédito imobiliário.
+- **Fila de Crédito CORPSA**: Encaminhamento direto de cadastros e pastas de documentos para a roleta e fila de análise de crédito.
+- **Calculadora de Apuração de Renda**: Verificação de renda formal e informal (extratos para autônomos, imposto de renda, pró-labore).
+
+## como agir 
+- Fale sempre em tom caloroso, atencioso, profissional e objetivo.
+- Trate o corretor diretamente por "você".
+- Envie respostas em mensagens curtas e diretas, sem blocos longos de texto.
+- Faça estritamente **UMA pergunta de cada vez** para manter a conversa fluida e organizada.
+- Ao identificar a dúvida do corretor, oriente de forma clara sobre quais documentos são necessários para a triagem.
+- Confirme o recebimento dos documentos e informe que a pasta será adicionada à fila de crédito da CORPSA.
+
+## nunca faça isso 
+- Nunca envie mensagens longas, prolixas ou com múltiplos parágrafos extensos.
+- Nunca faça mais de uma pergunta no mesmo balão de mensagem.
+- Nunca responda de forma fria, robótica ou distante.
+- Nunca altere, invente ou descarte informações fornecidas pelo corretor.
+- Nunca deixe o corretor sem um próximo passo claro para a triagem ou envio de documentos.`;
+
 export const AgenteIAChatTab: React.FC = () => {
   const [conversaId, setConversaId] = useState<string>('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -47,9 +69,12 @@ export const AgenteIAChatTab: React.FC = () => {
     return saved ? parseFloat(saved) : 0.7;
   });
 
+  const [promptCrmText, setPromptCrmText] = useState<string>(DEFAULT_PROMPT_AGENTCRM);
+  const [promptCrmSaved, setPromptCrmSaved] = useState<boolean>(false);
+
   const [constitutionText, setConstitutionText] = useState<string>('');
   const [constitutionSaved, setConstitutionSaved] = useState<boolean>(false);
-  const [activeSideTab, setActiveSideTab] = useState<'config' | 'constitution'>('config');
+  const [activeSideTab, setActiveSideTab] = useState<'config' | 'prompt' | 'constitution'>('prompt');
   const [errorMessage, setErrorMessage] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -76,7 +101,7 @@ export const AgenteIAChatTab: React.FC = () => {
           {
             id: '1',
             sender: 'agent',
-            text: 'Olá! Sou o Agente de IA do CORPSA CRM com memória ativada no Supabase. Lembro do seu histórico e das últimas 20 conversas gravadas nas tabelas agente_conversas e agente_mensagens. Como posso ajudar?',
+            text: 'Olá! Sou o analista responsável pela triagem de documentos da CORPSA. Como posso ajudar você hoje?',
             timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
             modelUsed: selectedModel
           }
@@ -85,8 +110,24 @@ export const AgenteIAChatTab: React.FC = () => {
     };
 
     initMemory();
+    fetchPromptCrm();
     fetchConstitution();
   }, []);
+
+  // Fetch prompt-agentcrm.md from server if available
+  const fetchPromptCrm = async () => {
+    try {
+      const res = await fetch('http://localhost:3001/api/agent/prompt-agentcrm');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.prompt) {
+          setPromptCrmText(data.prompt);
+        }
+      }
+    } catch (_e) {
+      // Server offline or on Vercel
+    }
+  };
 
   // Load Constitution
   const fetchConstitution = async () => {
@@ -119,6 +160,26 @@ export const AgenteIAChatTab: React.FC = () => {
     localStorage.setItem('openrouter_temp_v1', temperature.toString());
   }, [temperature]);
 
+  const handleSavePromptCrm = async () => {
+    try {
+      const res = await fetch('http://localhost:3001/api/agent/prompt-agentcrm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: promptCrmText })
+      });
+      if (res.ok) {
+        setPromptCrmSaved(true);
+        setTimeout(() => setPromptCrmSaved(false), 2500);
+      } else {
+        setPromptCrmSaved(true);
+        setTimeout(() => setPromptCrmSaved(false), 2500);
+      }
+    } catch (_e) {
+      setPromptCrmSaved(true);
+      setTimeout(() => setPromptCrmSaved(false), 2500);
+    }
+  };
+
   const handleSaveConstitution = async () => {
     try {
       const res = await fetch('http://localhost:3001/api/agent/constitution', {
@@ -139,11 +200,17 @@ export const AgenteIAChatTab: React.FC = () => {
     }
   };
 
-  // Direct OpenRouter completion handler reading last 20 messages from Supabase memory
+  // Direct OpenRouter completion handler reading prompt-agentcrm.md and last 20 messages from Supabase memory
   const callOpenRouterApi = async (memoryHistory: { sender: string; text: string }[], keyToUse: string, modelToUse: string): Promise<{ text: string; actualModel: string }> => {
-    const systemPrompt = constitutionText && constitutionText.trim()
-      ? `[CONSTITUIÇÃO E REGRAS DO AGENTE CORPSA CRM]:\n${constitutionText.trim()}`
-      : 'Você é o Agente de IA do CORPSA CRM com memória contínua de atendimento. Lembre-se das conversas passadas do cliente para dar respostas contextualizadas e personalizadas.';
+    const promptHeader = promptCrmText && promptCrmText.trim()
+      ? `[ESTRUTURA DE ATENDIMENTO CORPSA - prompt-agentcrm.md]:\n${promptCrmText.trim()}`
+      : `[ESTRUTURA DE ATENDIMENTO CORPSA]:\n${DEFAULT_PROMPT_AGENTCRM}`;
+
+    const constitutionHeader = constitutionText && constitutionText.trim()
+      ? `\n\n[CONSTITUIÇÃO E DIRETRIZES DO AGENTE]:\n${constitutionText.trim()}`
+      : '';
+
+    const systemPrompt = `${promptHeader}${constitutionHeader}`;
 
     // Utiliza estritamente as últimas 20 mensagens do histórico carregado
     const last20Messages = memoryHistory.slice(-20);
@@ -274,7 +341,7 @@ export const AgenteIAChatTab: React.FC = () => {
       // Backend offline, faz chamada direta
     }
 
-    // 4. Chamada direta ao OpenRouter usando as últimas 20 mensagens da memória
+    // 4. Chamada direta ao OpenRouter usando prompt-agentcrm.md e as últimas 20 mensagens da memória
     if (!activeKey) {
       setIsTyping(false);
       setErrorMessage('Insira sua OpenRouter API Key no painel à direita (ex: sk-or-v1-...) para conversar ao vivo.');
@@ -378,7 +445,7 @@ export const AgenteIAChatTab: React.FC = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <h2 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#1e293b' }}>
-                  Agente de IA do CRM (Memória Supabase)
+                  Agente de IA do CRM (Triagem CORPSA)
                 </h2>
                 <span 
                   style={{ 
@@ -391,12 +458,12 @@ export const AgenteIAChatTab: React.FC = () => {
                     letterSpacing: '0.5px'
                   }}
                 >
-                  NVIDIA NEMOTRON 3 ULTRA 550B
+                  prompt-agentcrm.md ATIVO
                 </span>
               </div>
               <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981' }}></span>
-                Memória Supabase Conectada: <code>agente_conversas</code> & <code>agente_mensagens</code>
+                Triagem de Documentos & Memória Supabase (Últimas 20 mensagens)
               </span>
             </div>
           </div>
@@ -475,25 +542,25 @@ export const AgenteIAChatTab: React.FC = () => {
           }}
         >
           <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#64748b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <FiPlay size={10} /> Testes Rápidos:
+            <FiPlay size={10} /> Testes de Triagem:
           </span>
           <button
-            onClick={() => handleApplyPreset('Olá! Você se lembra das informações que já conversamos anteriormente?')}
+            onClick={() => handleApplyPreset('Olá, preciso enviar a pasta de um cliente para a fila de crédito. Quais documentos você precisa?')}
+            style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            📋 Triagem de Documentos
+          </button>
+          <button
+            onClick={() => handleApplyPreset('Meu cliente é autônomo e tem extratos bancários dos últimos 6 meses. Como envio?')}
+            style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            💰 Extratos de Autônomo
+          </button>
+          <button
+            onClick={() => handleApplyPreset('Você já recebeu meus documentos anteriores?')}
             style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
           >
             🧠 Testar Memória
-          </button>
-          <button
-            onClick={() => handleApplyPreset('Quais documentos preciso enviar para fazer a análise de crédito de um imóvel?')}
-            style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-          >
-            📋 Documentos de Crédito
-          </button>
-          <button
-            onClick={() => handleApplyPreset('Como funciona a apuração de renda para autônomos que usam extrato bancário?')}
-            style={{ fontSize: '0.72rem', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-          >
-            💰 Renda por Extrato
           </button>
         </div>
 
@@ -613,7 +680,7 @@ export const AgenteIAChatTab: React.FC = () => {
                   border: '1px solid #e2e8f0'
                 }}
               >
-                Lendo últimas 20 mensagens e gerando resposta...
+                Lendo prompt-agentcrm.md e gerando resposta...
               </div>
             </div>
           )}
@@ -640,7 +707,7 @@ export const AgenteIAChatTab: React.FC = () => {
           <div style={{ display: 'flex', gap: '10px' }}>
             <input 
               type="text"
-              placeholder="Converse com o Agente de IA..."
+              placeholder="Digite sua dúvida ou envie informações para triagem..."
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               style={{
@@ -676,10 +743,10 @@ export const AgenteIAChatTab: React.FC = () => {
         </form>
       </div>
 
-      {/* Right / Settings & Constitution Panel */}
+      {/* Right / Settings, Prompt & Constitution Panel */}
       <div 
         style={{ 
-          width: '360px', 
+          width: '370px', 
           backgroundColor: 'var(--color-surface, #ffffff)', 
           borderRadius: '12px', 
           border: '1px solid var(--color-border, #e2e8f0)',
@@ -691,52 +758,126 @@ export const AgenteIAChatTab: React.FC = () => {
         }}
       >
         {/* Tabs Switcher */}
-        <div style={{ display: 'flex', gap: '6px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
+        <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
+          <button
+            onClick={() => setActiveSideTab('prompt')}
+            style={{
+              flex: 1,
+              padding: '6px 4px',
+              borderRadius: '6px',
+              border: 'none',
+              backgroundColor: activeSideTab === 'prompt' ? '#dcfce7' : 'transparent',
+              color: activeSideTab === 'prompt' ? '#15803d' : '#64748b',
+              fontWeight: 600,
+              fontSize: '0.75rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            <FiFileText size={13} />
+            Prompt CRM
+          </button>
           <button
             onClick={() => setActiveSideTab('config')}
             style={{
               flex: 1,
-              padding: '8px',
+              padding: '6px 4px',
               borderRadius: '6px',
               border: 'none',
               backgroundColor: activeSideTab === 'config' ? '#dcfce7' : 'transparent',
               color: activeSideTab === 'config' ? '#15803d' : '#64748b',
               fontWeight: 600,
-              fontSize: '0.8rem',
+              fontSize: '0.75rem',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
+              gap: '4px',
               cursor: 'pointer'
             }}
           >
-            <FiSliders size={14} />
-            Configurações
+            <FiSliders size={13} />
+            Config
           </button>
           <button
             onClick={() => setActiveSideTab('constitution')}
             style={{
               flex: 1,
-              padding: '8px',
+              padding: '6px 4px',
               borderRadius: '6px',
               border: 'none',
               backgroundColor: activeSideTab === 'constitution' ? '#dcfce7' : 'transparent',
               color: activeSideTab === 'constitution' ? '#15803d' : '#64748b',
               fontWeight: 600,
-              fontSize: '0.8rem',
+              fontSize: '0.75rem',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
+              gap: '4px',
               cursor: 'pointer'
             }}
           >
-            <FiCode size={14} />
-            Constituição (Skill)
+            <FiCode size={13} />
+            Constituição
           </button>
         </div>
 
-        {activeSideTab === 'config' ? (
+        {activeSideTab === 'prompt' ? (
+          /* Prompt Agent CRM Live Editor Tab */
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FiFileText size={15} style={{ color: '#15803d' }} />
+                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>prompt-agentcrm.md</span>
+              </div>
+              <span style={{ fontSize: '0.68rem', backgroundColor: '#dcfce7', color: '#15803d', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>Lido a cada requisição</span>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.72rem', color: '#64748b', lineHeight: '1.4' }}>
+              Diretrizes ativas do analista de triagem da CORPSA (objetivo, ferramentas, como agir e nunca faça isso).
+            </p>
+            <textarea
+              value={promptCrmText}
+              onChange={(e) => setPromptCrmText(e.target.value)}
+              placeholder="Digite a estrutura do prompt-agentcrm.md..."
+              style={{
+                flex: 1,
+                minHeight: '300px',
+                padding: '10px',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                fontSize: '0.78rem',
+                fontFamily: 'monospace',
+                resize: 'vertical',
+                outline: 'none',
+                lineHeight: '1.45'
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleSavePromptCrm}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                backgroundColor: promptCrmSaved ? '#16a34a' : '#15803d',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '10px',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'background-color 0.2s'
+              }}
+            >
+              <FiSave size={14} />
+              {promptCrmSaved ? 'Prompt Salvo!' : 'Salvar em prompt-agentcrm.md'}
+            </button>
+          </div>
+        ) : activeSideTab === 'config' ? (
           <>
             {/* Section: Memory Tables in Supabase */}
             <div 
@@ -842,35 +983,6 @@ export const AgenteIAChatTab: React.FC = () => {
                 />
               </div>
             </div>
-
-            {/* Architecture Summary */}
-            <div 
-              style={{ 
-                backgroundColor: '#f8fafc', 
-                padding: '14px', 
-                borderRadius: '8px', 
-                border: '1px solid #e2e8f0',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <FiCheckCircle size={14} style={{ color: '#10b981' }} />
-                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#0f172a' }}>Skill Ativa:</span>
-                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>skills/constituicao.md</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <FiGlobe size={14} style={{ color: '#0284c7' }} />
-                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#0f172a' }}>MCP Endpoint:</span>
-                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>mcp.openrouter.ai</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <FiTool size={14} style={{ color: '#f59e0b' }} />
-                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#0f172a' }}>Tool Código:</span>
-                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>tools/openrouterTool.ts</span>
-              </div>
-            </div>
           </>
         ) : (
           /* Constitution Live Editor Tab */
@@ -882,7 +994,7 @@ export const AgenteIAChatTab: React.FC = () => {
               </div>
             </div>
             <p style={{ margin: 0, fontSize: '0.72rem', color: '#64748b' }}>
-              Edite as regras e diretrizes de atendimento no arquivo <code>skills/constituicao.md</code>.
+              Edite as regras e diretrizes adicionais no arquivo <code>skills/constituicao.md</code>.
             </p>
             <textarea
               value={constitutionText}

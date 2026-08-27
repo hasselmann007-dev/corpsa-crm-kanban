@@ -81,6 +81,40 @@ export function saveAgentConstitution(content: string): boolean {
 }
 
 /**
+ * Reads the agent prompt from prompt-agentcrm.md
+ */
+export function getAgentPromptCrm(): string {
+  try {
+    const rootPath = path.resolve(__dirname, '..', 'prompt-agentcrm.md');
+    if (fs.existsSync(rootPath)) {
+      return fs.readFileSync(rootPath, 'utf-8').trim();
+    }
+    const skillPath = path.resolve(__dirname, '..', 'skills', 'prompt-agentcrm.md');
+    if (fs.existsSync(skillPath)) {
+      return fs.readFileSync(skillPath, 'utf-8').trim();
+    }
+  } catch (_e) {
+    // Ignore
+  }
+  return '';
+}
+
+/**
+ * Saves/updates prompt-agentcrm.md
+ */
+export function saveAgentPromptCrm(content: string): boolean {
+  try {
+    const rootPath = path.resolve(__dirname, '..', 'prompt-agentcrm.md');
+    fs.writeFileSync(rootPath, content, 'utf-8');
+    const skillPath = path.resolve(__dirname, '..', 'skills', 'prompt-agentcrm.md');
+    fs.writeFileSync(skillPath, content, 'utf-8');
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+/**
  * Tests connection to the OpenRouter MCP server at https://mcp.openrouter.ai/mcp
  */
 export async function testOpenRouterMcp(apiKey?: string): Promise<OpenRouterTestResult> {
