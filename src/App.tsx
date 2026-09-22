@@ -428,6 +428,46 @@ function App() {
     }
   }, []);
 
+  const extractMoFromInfo = (info?: string | null): string => {
+    if (!info) return '';
+    const match = info.match(/\bMO:\s*([^\n\r]+)/i);
+    return match ? match[1].trim() : '';
+  };
+
+  const extractStatusSerasaFromInfo = (info?: string | null): 'Pendente' | 'Sem Restrição' | 'Com Restrição' | 'Consultado' => {
+    if (!info) return 'Pendente';
+    const match = info.match(/\[STATUS SERASA:\s*([^\]\n\r]+)\]/i);
+    if (match) {
+      const s = match[1].trim();
+      if (['Sem Restrição', 'Com Restrição', 'Consultado', 'Pendente'].includes(s)) {
+        return s as any;
+      }
+    }
+    return 'Pendente';
+  };
+
+  const extractObsSerasaFromInfo = (info?: string | null): string => {
+    if (!info) return '';
+    const match = info.match(/\[OBS SERASA:\s*([^\]\n\r]+)\]/i);
+    return match ? match[1].trim() : '';
+  };
+
+  const extractDataConsultaSerasaFromInfo = (info?: string | null): string => {
+    if (!info) return '';
+    const match = info.match(/\[DATA CONSULTA SERASA:\s*([^\]\n\r]+)\]/i);
+    return match ? match[1].trim() : '';
+  };
+
+  const enrichLeadData = (rawLead: any): Lead => {
+    return {
+      ...rawLead,
+      mo_serasa: rawLead.mo_serasa || extractMoFromInfo(rawLead.informacoes_importantes),
+      status_serasa: rawLead.status_serasa || extractStatusSerasaFromInfo(rawLead.informacoes_importantes),
+      obs_serasa: rawLead.obs_serasa || extractObsSerasaFromInfo(rawLead.informacoes_importantes),
+      data_consulta_serasa: rawLead.data_consulta_serasa || extractDataConsultaSerasaFromInfo(rawLead.informacoes_importantes)
+    };
+  };
+
   const fetchLeads = useCallback(async () => {
     setLoading(true);
     try {
@@ -437,7 +477,8 @@ function App() {
         .order('data_hora_entrada', { ascending: false });
 
       if (error) throw error;
-      setLeads(data || []);
+      const enrichedLeads = (data || []).map(enrichLeadData);
+      setLeads(enrichedLeads);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Erro ao carregar leads.', 'error');
     } finally {
@@ -476,7 +517,7 @@ function App() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'leads' },
         (payload) => {
-          const newLead = payload.new as Lead;
+          const newLead = enrichLeadData(payload.new);
           // Toca o alarme sonoro e dispara a notificação no navegador para consulta Serasa em até 5 min
           notifyNewLeadArrival(newLead.nome_cliente, newLead.cpf_cliente, newLead.mo_serasa);
           showToast(`🚨 Nova Pasta na Roleta: ${newLead.nome_cliente}! Consulta Serasa em até 5 min.`, 'warning');
@@ -487,7 +528,7 @@ function App() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'leads' },
         (payload) => {
-          const updatedLead = payload.new as Lead;
+          const updatedLead = enrichLeadData(payload.new);
           setLeads((prev) => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
         }
       )
@@ -541,14 +582,44 @@ function App() {
     if (!selectedSerasaLead) return;
     setSerasaSaving(true);
     try {
+      const nowIso = new Date().toISOString();
+      let updatedInfo = selectedSerasaLead.informacoes_importantes || '';
+      
+      if (serasaForm.mo_serasa) {
+        if (/MO:\s*[^\n\r]+/i.test(updatedInfo)) {
+          updatedInfo = updatedInfo.replace(/MO:\s*[^\n\r]+/i, `MO: ${serasaForm.mo_serasa}`);
+        } else {
+          updatedInfo = `${updatedInfo}\nMO: ${serasaForm.mo_serasa}`.trim();
+        }
+      }
+
+      if (serasaForm.status_serasa) {
+        if (/\[STATUS SERASA:\s*[^\]\n\r]+\]/i.test(updatedInfo)) {
+          updatedInfo = updatedInfo.replace(/\[STATUS SERASA:\s*[^\]\n\r]+\]/i, `[STATUS SERASA: ${serasaForm.status_serasa}]`);
+        } else {
+          updatedInfo = `${updatedInfo}\n[STATUS SERASA: ${serasaForm.status_serasa}]`.trim();
+        }
+      }
+
+      if (serasaForm.obs_serasa) {
+        if (/\[OBS SERASA:\s*[^\]\n\r]+\]/i.test(updatedInfo)) {
+          updatedInfo = updatedInfo.replace(/\[OBS SERASA:\s*[^\]\n\r]+\]/i, `[OBS SERASA: ${serasaForm.obs_serasa}]`);
+        } else {
+          updatedInfo = `${updatedInfo}\n[OBS SERASA: ${serasaForm.obs_serasa}]`.trim();
+        }
+      }
+
+      if (/\[DATA CONSULTA SERASA:\s*[^\]\n\r]+\]/i.test(updatedInfo)) {
+        updatedInfo = updatedInfo.replace(/\[DATA CONSULTA SERASA:\s*[^\]\n\r]+\]/i, `[DATA CONSULTA SERASA: ${nowIso}]`);
+      } else {
+        updatedInfo = `${updatedInfo}\n[DATA CONSULTA SERASA: ${nowIso}]`.trim();
+      }
+
       const { error } = await supabase
         .from('leads')
         .update({
           cpf_cliente: serasaForm.cpf_cliente,
-          mo_serasa: serasaForm.mo_serasa,
-          status_serasa: serasaForm.status_serasa,
-          obs_serasa: serasaForm.obs_serasa,
-          data_consulta_serasa: new Date().toISOString()
+          informacoes_importantes: updatedInfo
         })
         .eq('id', selectedSerasaLead.id);
 
@@ -561,7 +632,8 @@ function App() {
           mo_serasa: serasaForm.mo_serasa,
           status_serasa: serasaForm.status_serasa,
           obs_serasa: serasaForm.obs_serasa,
-          data_consulta_serasa: new Date().toISOString()
+          data_consulta_serasa: nowIso,
+          informacoes_importantes: updatedInfo
         } : l
       ));
 
@@ -824,6 +896,12 @@ function App() {
         }
       }
 
+      // Monta informacoes_importantes com o MO garantido se extraído do texto
+      let finalInfo = parsed.informacoes_importantes?.trim() || '';
+      if (parsed.mo_serasa && !finalInfo.includes(`MO: ${parsed.mo_serasa}`)) {
+        finalInfo = finalInfo ? `${finalInfo}\nMO: ${parsed.mo_serasa}` : `MO: ${parsed.mo_serasa}`;
+      }
+
       const { data, error } = await supabase
         .from('leads')
         .insert({
@@ -832,13 +910,11 @@ function App() {
           valor_imovel: valorImovel,
           cidade: cidade,
           grupo_origem: grupoOrigem,
-          informacoes_importantes: parsed.informacoes_importantes?.trim() || null,
+          informacoes_importantes: finalInfo || null,
           data_hora_entrada: new Date().toISOString(),
           etapa: 'Roleta',
           prioridade: 'Baixa',
-          status_serasa: 'Pendente',
-          adicionado_corpay: false,
-          mo_serasa: parsed.mo_serasa || null
+          adicionado_corpay: false
         })
         .select()
         .single();
@@ -852,7 +928,12 @@ function App() {
 
       // 🚀 Abre imediatamente o Dossiê de 3 Colunas para o novo lead
       if (data) {
-        setFullDossierLead(data);
+        const enrichedNewLead: Lead = {
+          ...data,
+          mo_serasa: parsed.mo_serasa || extractMoFromInfo(data.informacoes_importantes),
+          status_serasa: 'Pendente'
+        };
+        setFullDossierLead(enrichedNewLead);
         setShowFullDossierModal(true);
       }
     } catch (err) {
@@ -924,9 +1005,44 @@ function App() {
     fields: Partial<Lead>
   ) => {
     try {
+      const { 
+        mo_serasa, 
+        status_serasa, 
+        obs_serasa, 
+        data_consulta_serasa, 
+        id, 
+        ...cleanFields 
+      } = fields as any;
+
+      if (mo_serasa || status_serasa || obs_serasa) {
+        let currentInfo = cleanFields.informacoes_importantes ?? leads.find(l => l.id === leadId)?.informacoes_importantes ?? '';
+        if (mo_serasa) {
+          if (/MO:\s*[^\n\r]+/i.test(currentInfo)) {
+            currentInfo = currentInfo.replace(/MO:\s*[^\n\r]+/i, `MO: ${mo_serasa}`);
+          } else {
+            currentInfo = `${currentInfo}\nMO: ${mo_serasa}`.trim();
+          }
+        }
+        if (status_serasa) {
+          if (/\[STATUS SERASA:\s*[^\]\n\r]+\]/i.test(currentInfo)) {
+            currentInfo = currentInfo.replace(/\[STATUS SERASA:\s*[^\]\n\r]+\]/i, `[STATUS SERASA: ${status_serasa}]`);
+          } else {
+            currentInfo = `${currentInfo}\n[STATUS SERASA: ${status_serasa}]`.trim();
+          }
+        }
+        if (obs_serasa) {
+          if (/\[OBS SERASA:\s*[^\]\n\r]+\]/i.test(currentInfo)) {
+            currentInfo = currentInfo.replace(/\[OBS SERASA:\s*[^\]\n\r]+\]/i, `[OBS SERASA: ${obs_serasa}]`);
+          } else {
+            currentInfo = `${currentInfo}\n[OBS SERASA: ${obs_serasa}]`.trim();
+          }
+        }
+        cleanFields.informacoes_importantes = currentInfo;
+      }
+
       const { error } = await supabase
         .from('leads')
-        .update({ etapa, ...fields })
+        .update({ etapa, ...cleanFields })
         .eq('id', leadId);
 
       if (error) throw error;
