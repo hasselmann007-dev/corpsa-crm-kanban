@@ -1,35 +1,81 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import { parseRawText, isValidCpf } from './utils/parser';
-import { isLeadSLAOverdue, isPendenciaSLAOverdue } from './utils/sla';
+import { isPendenciaSLAOverdue, getLeadSlaCountdown } from './utils/sla';
 import { ApuracaoRendaTab } from './components/ApuracaoRendaTab';
 import { AgenteIAChatTab } from './components/AgenteIAChatTab';
 import type { Session } from '@supabase/supabase-js';
 import { 
-  FiPlus, 
-  FiSearch, 
-  FiAlertCircle, 
-  FiCheckCircle, 
-  FiX, 
-  FiGrid, 
-  FiActivity, 
-  FiDollarSign, 
-  FiFileText, 
-  FiMapPin, 
-  FiUsers, 
-  FiLock,
-  FiTrendingUp,
-  FiHelpCircle,
-  FiHome,
-  FiFlag,
-  FiCheckSquare,
-  FiTrash2,
-  FiMinimize2,
-  FiClock,
-  FiCpu
-} from 'react-icons/fi';
+  Plus, 
+  Search, 
+  AlertCircle, 
+  CheckCircle2, 
+  X, 
+  Grid, 
+  Activity, 
+  DollarSign, 
+  FileText, 
+  MapPin, 
+  Users, 
+  Lock,
+  TrendingUp,
+  Flag,
+  CheckSquare,
+  Trash2,
+  Minimize2,
+  Clock,
+  Cpu,
+  Bell,
+  Volume2,
+  Shield,
+  Zap,
+  RotateCw,
+  ChevronDown,
+  Power,
+  User,
+  KeyRound,
+  LogOut,
+  Settings
+} from 'lucide-react';
 
-interface Lead {
+// Mapeamento compatível para Lucide Icons
+const FiPlus = Plus;
+const FiSearch = Search;
+const FiAlertCircle = AlertCircle;
+const FiCheckCircle = CheckCircle2;
+const FiX = X;
+const FiGrid = Grid;
+const FiActivity = Activity;
+const FiDollarSign = DollarSign;
+const FiFileText = FileText;
+const FiMapPin = MapPin;
+const FiUsers = Users;
+const FiLock = Lock;
+const FiTrendingUp = TrendingUp;
+const FiFlag = Flag;
+const FiCheckSquare = CheckSquare;
+const FiTrash2 = Trash2;
+const FiMinimize2 = Minimize2;
+const FiClock = Clock;
+const FiCpu = Cpu;
+const FiBell = Bell;
+const FiVolume2 = Volume2;
+const FiShield = Shield;
+const FiZap = Zap;
+import { 
+  playAlertChime, 
+  requestNotificationPermission, 
+  notifyNewLeadArrival 
+} from './utils/notificationSound';
+import { ConsultaRapidaPopup } from './components/ConsultaRapidaPopup';
+import { ConsultaRapidaToastAlert } from './components/ConsultaRapidaToastAlert';
+import { AnalistasOnlineBar } from './components/AnalistasOnlineBar';
+import { LeadDetailFullModal } from './components/LeadDetailFullModal';
+import { getConsultasRapidas, getAnalistasPresenca, setAnalistaStatus } from './utils/consultaRapidaStore';
+import type { AnalistaPresenca } from './types/consultaRapida';
+import { getAnalistaResponsavel, isAnalistaOnline } from './utils/analistaResponsavel';
+
+export interface Lead {
   id: string;
   data_hora_entrada: string;
   nome_cliente: string;
@@ -47,6 +93,10 @@ interface Lead {
   categoria?: string;
   adicionado_corpay: boolean;
   prioridade?: 'Baixa' | 'Média' | 'Alta';
+  mo_serasa?: string;
+  status_serasa?: 'Pendente' | 'Sem Restrição' | 'Com Restrição' | 'Consultado';
+  data_consulta_serasa?: string;
+  obs_serasa?: string;
 }
 
 const COLUMNS = [
@@ -101,43 +151,126 @@ function App() {
   const [showTransitionModal, setShowTransitionModal] = useState(false);
   const [transitionData, setTransitionData] = useState<{ lead: Lead; targetEtapa: 'Roleta' | 'Pendencia' | 'Analise' | 'Conclusao' } | null>(null);
 
-  // Click & Edit Card State
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
-  const [editForm, setEditForm] = useState({
-    nome_cliente: '',
-    cpf_cliente: '',
-    valor_imovel: '',
-    cidade: '',
-    grupo_origem: '',
-    informacoes_importantes: '',
-    descricao_pendencia: '',
-    resultado_analise: '',
-    motivo_resultado: '',
-    tipo_avaliacao: '',
-    tipo_financiamento: '',
-    categoria: '',
-    prioridade: 'Baixa'
+  // Notification & Audio Alert Permission
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    return typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'default';
   });
-  const [editFormErrors, setEditFormErrors] = useState<Record<string, string>>({});
+
+  // Serasa Modal State
+  const [showSerasaModal, setShowSerasaModal] = useState(false);
+  const [selectedSerasaLead, setSelectedSerasaLead] = useState<Lead | null>(null);
+  const [serasaForm, setSerasaForm] = useState({
+    cpf_cliente: '',
+    mo_serasa: '',
+    status_serasa: 'Pendente' as 'Pendente' | 'Sem Restrição' | 'Com Restrição' | 'Consultado',
+    obs_serasa: ''
+  });
+  const [serasaSaving, setSerasaSaving] = useState(false);
+
+  // Quick Consultations (Consultas Rápidas) Drawer State
+  const [showConsultaRapidaDrawer, setShowConsultaRapidaDrawer] = useState(false);
+  const [consultasPendentesCount, setConsultasPendentesCount] = useState<number>(() => {
+    return getConsultasRapidas().filter(c => c.status === 'Pendente').length;
+  });
+
+  useEffect(() => {
+    const handleUpdateCount = () => {
+      setConsultasPendentesCount(getConsultasRapidas().filter(c => c.status === 'Pendente').length);
+    };
+    window.addEventListener('corpsa_nova_consulta_rapida', handleUpdateCount);
+    window.addEventListener('corpsa_consulta_rapida_atualizada', handleUpdateCount);
+    return () => {
+      window.removeEventListener('corpsa_nova_consulta_rapida', handleUpdateCount);
+      window.removeEventListener('corpsa_consulta_rapida_atualizada', handleUpdateCount);
+    };
+  }, []);
+
+  // Presence and Topbar state (Estilo AIOS)
+  const [analistasList, setAnalistasList] = useState<AnalistaPresenca[]>(() => getAnalistasPresenca());
+  const [showPresencePopover, setShowPresencePopover] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+  const presencePopoverRef = React.useRef<HTMLDivElement>(null);
+  const profileMenuRef = React.useRef<HTMLDivElement>(null);
+
+  // Real-time Date and Time (seg 15/09 • 23:55)
+  const formatDateTimeNow = () => {
+    const now = new Date();
+    const days = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+    const dayName = days[now.getDay()];
+    const dateNum = String(now.getDate()).padStart(2, '0');
+    const monthNum = String(now.getMonth() + 1).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${dayName} ${dateNum}/${monthNum} • ${hours}:${minutes}`;
+  };
+  const [currentDateTimeStr, setCurrentDateTimeStr] = useState<string>(formatDateTimeNow);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentDateTimeStr(formatDateTimeNow());
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const handlePresenceChanged = (e: any) => {
+      if (e.detail) {
+        setAnalistasList(e.detail);
+      } else {
+        setAnalistasList(getAnalistasPresenca());
+      }
+    };
+    window.addEventListener('corpsa_analistas_status_changed', handlePresenceChanged);
+    return () => {
+      window.removeEventListener('corpsa_analistas_status_changed', handlePresenceChanged);
+    };
+  }, []);
+
+  // Atalho Global: Ctrl+K ou ⌘K foca no campo de busca estilo AIOS
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Fechar popovers ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (presencePopoverRef.current && !presencePopoverRef.current.contains(e.target as Node)) {
+        setShowPresencePopover(false);
+      }
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setShowUserMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Full Client Dossier Modal State (Opens on ANY Card Click)
+  const [showFullDossierModal, setShowFullDossierModal] = useState(false);
+  const [fullDossierLead, setFullDossierLead] = useState<Lead | null>(null);
+
+  // Escopo do Dashboard (Único por Usuário vs Geral)
+  const [dashboardScope, setDashboardScope] = useState<'me' | 'all'>('me');
+
+  // Estado para detecção de CPF duplicado no cadastro
+  const [duplicateLeadFound, setDuplicateLeadFound] = useState<Lead | null>(null);
 
   // Toast / Alert notifications
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'warning' | 'error' | 'success' }[]>([]);
 
-  // Add Lead Form State
+  // Add Lead Form State (Criação Rápida via Mensagem do Corretor)
   const [rawText, setRawText] = useState('');
+  const [addLoading, setAddLoading] = useState(false);
   const [addFormErrors, setAddFormErrors] = useState<Record<string, string>>({});
-  const [addLeadStep, setAddLeadStep] = useState<1 | 2>(1);
-  const [parsedLeadForm, setParsedLeadForm] = useState({
-    nome_cliente: '',
-    cpf_cliente: '',
-    valor_imovel: '',
-    cidade: '',
-    grupo_origem: '',
-    analista: '',
-    servico: 'AVALIAÇÃO',
-    notes: '',
-    data_hora_entrada: '',
-  });
 
   // Sticky Notes (Pendências) Widget State
   interface StickyNote {
@@ -312,7 +445,7 @@ function App() {
     }
   }, [showToast]);
 
-  // Fetch session and set up auth listener
+  // Fetch session and set up auth listener + Realtime leads notifications
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -336,8 +469,110 @@ function App() {
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, [fetchProfile, fetchLeads]);
+    // Realtime channel para novas pastas na Roleta e atualizações de leads
+    const leadsChannel = supabase
+      .channel('public:leads_realtime_alert')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'leads' },
+        (payload) => {
+          const newLead = payload.new as Lead;
+          // Toca o alarme sonoro e dispara a notificação no navegador para consulta Serasa em até 5 min
+          notifyNewLeadArrival(newLead.nome_cliente, newLead.cpf_cliente, newLead.mo_serasa);
+          showToast(`🚨 Nova Pasta na Roleta: ${newLead.nome_cliente}! Consulta Serasa em até 5 min.`, 'warning');
+          setLeads((prev) => [newLead, ...prev.filter(l => l.id !== newLead.id)]);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'leads' },
+        (payload) => {
+          const updatedLead = payload.new as Lead;
+          setLeads((prev) => prev.map(l => l.id === updatedLead.id ? updatedLead : l));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'leads' },
+        (payload) => {
+          const deletedId = (payload.old as any)?.id;
+          if (deletedId) {
+            setLeads((prev) => prev.filter(l => l.id !== deletedId));
+          }
+        }
+      )
+      .subscribe();
+
+    const handleRefresh = () => {
+      fetchLeads();
+    };
+    window.addEventListener('corpsa_refresh_leads', handleRefresh);
+
+    return () => {
+      subscription.unsubscribe();
+      supabase.removeChannel(leadsChannel);
+      window.removeEventListener('corpsa_refresh_leads', handleRefresh);
+    };
+  }, [fetchProfile, fetchLeads, showToast]);
+
+  const handleRequestNotification = async () => {
+    const perm = await requestNotificationPermission();
+    setNotificationPermission(perm);
+    if (perm === 'granted') {
+      showToast('🔔 Notificações e alerta sonoro ativados com sucesso!', 'success');
+    } else {
+      showToast('Permissão de notificação negada ou não aceita pelo navegador.', 'warning');
+    }
+  };
+
+  const handleOpenSerasaModal = (lead: Lead) => {
+    setSelectedSerasaLead(lead);
+    setSerasaForm({
+      cpf_cliente: lead.cpf_cliente || '',
+      mo_serasa: lead.mo_serasa || '',
+      status_serasa: lead.status_serasa || 'Pendente',
+      obs_serasa: lead.obs_serasa || ''
+    });
+    setShowSerasaModal(true);
+  };
+
+  const handleSaveSerasa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSerasaLead) return;
+    setSerasaSaving(true);
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({
+          cpf_cliente: serasaForm.cpf_cliente,
+          mo_serasa: serasaForm.mo_serasa,
+          status_serasa: serasaForm.status_serasa,
+          obs_serasa: serasaForm.obs_serasa,
+          data_consulta_serasa: new Date().toISOString()
+        })
+        .eq('id', selectedSerasaLead.id);
+
+      if (error) throw error;
+
+      setLeads((prev) => prev.map((l) => 
+        l.id === selectedSerasaLead.id ? { 
+          ...l, 
+          cpf_cliente: serasaForm.cpf_cliente,
+          mo_serasa: serasaForm.mo_serasa,
+          status_serasa: serasaForm.status_serasa,
+          obs_serasa: serasaForm.obs_serasa,
+          data_consulta_serasa: new Date().toISOString()
+        } : l
+      ));
+
+      showToast('Consulta Serasa salva com sucesso!', 'success');
+      setShowSerasaModal(false);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao salvar Serasa.', 'error');
+    } finally {
+      setSerasaSaving(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -419,10 +654,6 @@ function App() {
   }, []);
 
   // SLA Helpers (using src/utils/sla.ts logic)
-  const isSlaDelayed = (dataHoraEntrada?: string | null, etapa?: string): boolean => {
-    return isLeadSLAOverdue(dataHoraEntrada, etapa);
-  };
-
   const isStickySlaDelayed = (note: { completed: boolean; createdAt?: string }): boolean => {
     return isPendenciaSLAOverdue(note.createdAt, note.completed);
   };
@@ -544,140 +775,90 @@ function App() {
     return r;
   };
 
-  const formatCurrency = (val: string) => {
-    const digits = val.replace(/\D/g, '');
-    if (!digits) return '';
-    const numeric = parseFloat(digits) / 100;
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(numeric);
-  };
-
-  const parseCurrency = (val: string): number => {
-    const digits = val.replace(/\D/g, '');
-    if (!digits) return 0;
-    return parseFloat(digits) / 100;
-  };
-
-  const handleCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const formatted = formatCPF(e.target.value);
-    setParsedLeadForm(prev => ({ ...prev, cpf_cliente: formatted }));
-  };
-
-  const handleValorChange = (valStr: string) => {
-    const formatted = formatCurrency(valStr);
-    setParsedLeadForm(prev => ({ ...prev, valor_imovel: formatted }));
-  };
-
-  const handleAddLeadSubmit = async (e: React.FormEvent) => {
+  const handleQuickCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddFormErrors({});
 
-    if (addLeadStep === 1) {
-      if (!rawText.trim()) {
-        setAddFormErrors({ raw_text: 'O texto do lead é obrigatório.' });
-        return;
-      }
-
-      const parsed = parseRawText(rawText);
-
-      // Populate parsed lead form state
-      setParsedLeadForm({
-        nome_cliente: parsed.nome_cliente || '',
-        cpf_cliente: parsed.cpf_cliente || '',
-        valor_imovel: parsed.valor_imovel ? formatCurrency(String(parsed.valor_imovel * 100)) : '',
-        cidade: parsed.cidade || 'Não Informada',
-        grupo_origem: parsed.grupo_origem || 'WhatsApp',
-        analista: parsed.analista || '',
-        servico: parsed.servico || 'AVALIAÇÃO',
-        notes: parsed.notes || '',
-        data_hora_entrada: parsed.data_hora_entrada,
-      });
-
-      // Go to step 2 directly (even if fields are missing or invalid)
-      setAddLeadStep(2);
+    if (!rawText.trim()) {
+      setAddFormErrors({ raw_text: 'Cole a mensagem do corretor antes de cadastrar.' });
       return;
     }
 
-    // Step 2: Final submission validation
-    const errors: Record<string, string> = {};
-    
-    if (!parsedLeadForm.nome_cliente.trim()) {
-      errors.nome_cliente = 'Nome do cliente é obrigatório.';
-    }
-    
-    const rawCpf = parsedLeadForm.cpf_cliente.replace(/\D/g, '');
-    if (!rawCpf) {
-      errors.cpf_cliente = 'CPF do cliente é obrigatório.';
-    } else if (rawCpf.length !== 11) {
-      errors.cpf_cliente = 'CPF deve conter 11 dígitos.';
-    } else if (!isValidCpf(rawCpf)) {
-      errors.cpf_cliente = 'CPF inválido (checksum falhou).';
-    }
-
-    const numericValor = parseFloat(parsedLeadForm.valor_imovel.replace(/\D/g, '')) / 100 || 0;
-    if (numericValor <= 0) {
-      errors.valor_imovel = 'Valor do imóvel é obrigatório e deve ser maior que zero.';
-    }
-
-    if (!parsedLeadForm.cidade.trim()) {
-      errors.cidade = 'Cidade / Localização é obrigatória.';
-    }
-
-    if (!parsedLeadForm.grupo_origem.trim()) {
-      errors.grupo_origem = 'Grupo de Origem é obrigatório.';
-    }
-
-    setAddFormErrors(errors);
-    if (Object.keys(errors).length > 0) return;
-
-    // Compile Analyst, Service and Notes into informacoes_importantes
-    const infoParts: string[] = [];
-    if (parsedLeadForm.analista.trim()) {
-      let analystHandle = parsedLeadForm.analista.trim();
-      if (!analystHandle.startsWith('@')) {
-        analystHandle = `@${analystHandle}`;
-      }
-      infoParts.push(`Analista: ${analystHandle}`);
-    }
-    if (parsedLeadForm.servico.trim()) {
-      infoParts.push(`Serviço: ${parsedLeadForm.servico.trim()}`);
-    }
-    if (parsedLeadForm.notes.trim()) {
-      infoParts.push(`Notas: ${parsedLeadForm.notes.trim()}`);
-    }
-    const compiledInfo = infoParts.join("\n");
-
+    setAddLoading(true);
     try {
+      const parsed = parseRawText(rawText);
+
+      // Garante conformidade estrita com o schema e constraints do Supabase
+      const nomeCliente = parsed.nome_cliente?.trim() || 'NOVO CLIENTE';
+      const cpfCliente = (parsed.cpf_cliente && isValidCpf(parsed.cpf_cliente)) 
+        ? parsed.cpf_cliente 
+        : '000.000.000-00';
+      const valorImovel = parsed.valor_imovel || 0;
+      const cidade = (parsed.cidade && parsed.cidade !== 'Não Informada') 
+        ? parsed.cidade.trim() 
+        : 'Ribeirão Preto';
+      const grupoOrigem = parsed.grupo_origem?.trim() || 'WhatsApp';
+
+      // 🛑 REGRA DE UNICIDADE DE CPF: Não pode haver 2 cards com o mesmo CPF no fluxo
+      if (cpfCliente && cpfCliente !== '000.000.000-00') {
+        const existing = leads.find(l => l.cpf_cliente === cpfCliente);
+        if (existing) {
+          setDuplicateLeadFound(existing);
+          setAddLoading(false);
+          showToast(`CPF já cadastrado para ${existing.nome_cliente}.`, 'warning');
+          return;
+        }
+
+        const { data: dbExisting } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('cpf_cliente', cpfCliente)
+          .limit(1)
+          .maybeSingle();
+
+        if (dbExisting) {
+          setDuplicateLeadFound(dbExisting);
+          setAddLoading(false);
+          showToast(`CPF já cadastrado para ${dbExisting.nome_cliente}.`, 'warning');
+          return;
+        }
+      }
+
       const { data, error } = await supabase
         .from('leads')
         .insert({
-          nome_cliente: parsedLeadForm.nome_cliente.trim(),
-          cpf_cliente: parsedLeadForm.cpf_cliente,
-          valor_imovel: numericValor,
-          cidade: parsedLeadForm.cidade.trim(),
-          grupo_origem: parsedLeadForm.grupo_origem.trim(),
-          informacoes_importantes: compiledInfo.trim() || null,
-          data_hora_entrada: parsedLeadForm.data_hora_entrada || new Date().toISOString(),
+          nome_cliente: nomeCliente,
+          cpf_cliente: cpfCliente,
+          valor_imovel: valorImovel,
+          cidade: cidade,
+          grupo_origem: grupoOrigem,
+          informacoes_importantes: parsed.informacoes_importantes?.trim() || null,
+          data_hora_entrada: new Date().toISOString(),
           etapa: 'Roleta',
-          prioridade: 'Baixa'
+          prioridade: 'Baixa',
+          status_serasa: 'Pendente',
+          adicionado_corpay: false,
+          mo_serasa: parsed.mo_serasa || null
         })
         .select()
         .single();
 
       if (error) throw error;
 
-      showToast('Lead cadastrado com sucesso!', 'success');
+      showToast('✨ Lead cadastrado na Roleta com sucesso!', 'success');
       setShowAddModal(false);
       setRawText('');
-      setAddLeadStep(1);
       fetchLeads();
+
+      // 🚀 Abre imediatamente o Dossiê de 3 Colunas para o novo lead
       if (data) {
-        handleCardClick(data);
+        setFullDossierLead(data);
+        setShowFullDossierModal(true);
       }
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Erro ao cadastrar lead.', 'error');
+      showToast(err instanceof Error ? err.message : 'Erro ao cadastrar lead via mensagem.', 'error');
+    } finally {
+      setAddLoading(false);
     }
   };
 
@@ -807,184 +988,10 @@ function App() {
     setTransitionData(null);
   };
 
-  // Card View & Edit Handlers
+  // Card View & Full Dossier Handlers (Unificado exclusivamente no Dossiê de 3 Colunas)
   const handleCardClick = (lead: Lead) => {
-    setSelectedLead(lead);
-    setEditForm({
-      nome_cliente: lead.nome_cliente,
-      cpf_cliente: lead.cpf_cliente,
-      valor_imovel: formatCurrency((lead.valor_imovel * 100).toFixed(0)),
-      cidade: lead.cidade,
-      grupo_origem: lead.grupo_origem,
-      informacoes_importantes: lead.informacoes_importantes || '',
-      descricao_pendencia: lead.descricao_pendencia || '',
-      resultado_analise: lead.resultado_analise || '',
-      motivo_resultado: lead.motivo_resultado || '',
-      tipo_avaliacao: lead.tipo_avaliacao || '',
-      tipo_financiamento: lead.tipo_financiamento || '',
-      categoria: lead.categoria || '',
-      prioridade: lead.prioridade || 'Baixa'
-    });
-    setEditFormErrors({});
-  };
-
-  const validateEditForm = () => {
-    const errors: Record<string, string> = {};
-    if (!selectedLead) return false;
-
-    // Only validate client info if the stage is Roleta or Conclusao (since basic fields are only editable there)
-    if (selectedLead.etapa === 'Roleta' || selectedLead.etapa === 'Conclusao') {
-      if (!editForm.nome_cliente.trim()) errors.nome_cliente = 'Nome do cliente é obrigatório.';
-      
-      const cpfClean = editForm.cpf_cliente.replace(/\D/g, '');
-      if (cpfClean.length !== 11) {
-        errors.cpf_cliente = 'CPF inválido. Deve possuir 11 dígitos.';
-      } else if (!/^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(editForm.cpf_cliente)) {
-        errors.cpf_cliente = 'CPF deve estar no formato 000.000.000-00.';
-      }
-      
-      const value = parseCurrency(editForm.valor_imovel);
-      if (!editForm.valor_imovel || value <= 0) {
-        errors.valor_imovel = 'Valor do imóvel deve ser maior que R$ 0,00.';
-      }
-      
-      if (!editForm.cidade.trim()) errors.cidade = 'Cidade é obrigatória.';
-      if (!editForm.grupo_origem.trim()) errors.grupo_origem = 'Grupo de WhatsApp de origem é obrigatório.';
-    }
-
-    // Only validate Pendencia if current stage is Pendencia or Conclusao (if filled)
-    if (selectedLead.etapa === 'Pendencia') {
-      if (!editForm.descricao_pendencia.trim()) {
-        errors.descricao_pendencia = 'A descrição do que falta para análise é obrigatória.';
-      }
-    }
-
-    // Only validate Analise if current stage is Analise or Conclusao (if filled)
-    if (selectedLead.etapa === 'Analise') {
-      if (!editForm.resultado_analise) {
-        errors.resultado_analise = 'Selecione o resultado da análise de crédito.';
-      } else if (
-        (editForm.resultado_analise === 'Condicionado' || 
-         editForm.resultado_analise === 'Reprovado' || 
-         editForm.resultado_analise === 'Segue Pendente de Documento') &&
-        !editForm.motivo_resultado.trim()
-      ) {
-        errors.motivo_resultado = 'Por favor, detalhe as observações/motivos/exigências deste resultado.';
-      }
-    }
-
-    // CorPay validation if lead is in Conclusao and trying to add/save with evaluation type selected
-    if (selectedLead.etapa === 'Conclusao' && editForm.tipo_avaliacao) {
-      if (!editForm.categoria.trim()) {
-        errors.categoria = 'A categoria é obrigatória.';
-      }
-      if (editForm.tipo_avaliacao === 'Nova Avaliação' && !editForm.tipo_financiamento) {
-        errors.tipo_financiamento = 'Selecione o tipo de financiamento.';
-      }
-    }
-
-    setEditFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleEditSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedLead) return;
-    if (!validateEditForm()) return;
-
-    try {
-      const updateData: Record<string, unknown> = {};
-
-      // Always update priority
-      updateData.prioridade = editForm.prioridade || 'Baixa';
-
-      // If in Roleta or Conclusao, save basic fields
-      if (selectedLead.etapa === 'Roleta' || selectedLead.etapa === 'Conclusao') {
-        updateData.nome_cliente = editForm.nome_cliente.trim();
-        updateData.cpf_cliente = editForm.cpf_cliente;
-        updateData.valor_imovel = parseCurrency(editForm.valor_imovel);
-        updateData.cidade = editForm.cidade.trim();
-        updateData.grupo_origem = editForm.grupo_origem.trim();
-        updateData.informacoes_importantes = editForm.informacoes_importantes.trim() || null;
-      }
-
-      // If in Pendencia or Conclusao, save pendencia
-      if (selectedLead.etapa === 'Pendencia' || selectedLead.etapa === 'Conclusao') {
-        updateData.descricao_pendencia = editForm.descricao_pendencia.trim() || null;
-      }
-
-      // If in Analise or Conclusao, save credit analysis
-      if (selectedLead.etapa === 'Analise' || selectedLead.etapa === 'Conclusao') {
-        updateData.resultado_analise = editForm.resultado_analise || null;
-        if (editForm.resultado_analise === 'Condicionado' || 
-            editForm.resultado_analise === 'Reprovado' || 
-            editForm.resultado_analise === 'Segue Pendente de Documento') {
-          updateData.motivo_resultado = editForm.motivo_resultado.trim();
-        } else {
-          updateData.motivo_resultado = null;
-        }
-      }
-
-      // If in Conclusao, save CorPay details if present
-      if (selectedLead.etapa === 'Conclusao') {
-        updateData.tipo_avaliacao = editForm.tipo_avaliacao || null;
-        updateData.categoria = editForm.categoria.trim() || null;
-        updateData.tipo_financiamento = editForm.tipo_avaliacao === 'Nova Avaliação' ? (editForm.tipo_financiamento || null) : null;
-      }
-
-      const { error } = await supabase
-        .from('leads')
-        .update(updateData)
-        .eq('id', selectedLead.id);
-
-      if (error) throw error;
-
-      showToast('Lead atualizado com sucesso!', 'success');
-      setSelectedLead(null);
-      fetchLeads();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Erro ao atualizar lead.', 'error');
-    }
-  };
-
-  const handleAddToCorPay = async () => {
-    if (!selectedLead) return;
-
-    const errors: Record<string, string> = {};
-    if (!editForm.tipo_avaliacao) {
-      errors.tipo_avaliacao = 'Selecione o tipo de avaliação para lançar no CorPay.';
-    }
-    if (!editForm.categoria.trim()) {
-      errors.categoria = 'A categoria é obrigatória para lançar no CorPay.';
-    }
-    if (editForm.tipo_avaliacao === 'Nova Avaliação' && !editForm.tipo_financiamento) {
-      errors.tipo_financiamento = 'Selecione o tipo de financiamento.';
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setEditFormErrors(prev => ({ ...prev, ...errors }));
-      return;
-    }
-
-    try {
-      const { error } = await supabase
-        .from('leads')
-        .update({
-          tipo_avaliacao: editForm.tipo_avaliacao,
-          categoria: editForm.categoria.trim(),
-          tipo_financiamento: editForm.tipo_avaliacao === 'Reavaliação' ? null : editForm.tipo_financiamento,
-          adicionado_corpay: true
-        })
-        .eq('id', selectedLead.id);
-
-      if (error) throw error;
-
-      showToast('Pasta adicionada ao CorPay com sucesso!', 'success');
-      setSelectedLead(null);
-      fetchLeads();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Erro ao adicionar pasta ao CorPay.', 'error');
-    }
+    setFullDossierLead(lead);
+    setShowFullDossierModal(true);
   };
 
   // Filtered Leads
@@ -999,19 +1006,69 @@ function App() {
     );
   });
 
+  // Escopo do Dashboard (Regra de Negócio: Dashboard de Pastas Único por Usuário)
+  const currentAnalistaNome = userProfile?.nome_completo || 'Danilo Hasselmann';
+  const dashboardLeads = dashboardScope === 'me'
+    ? leads.filter((lead) => {
+        const resp = getAnalistaResponsavel(lead, currentAnalistaNome);
+        const cleanResp = resp.toLowerCase().trim();
+        const cleanCurrent = currentAnalistaNome.toLowerCase().trim();
+        return cleanResp.includes(cleanCurrent) || cleanCurrent.includes(cleanResp);
+      })
+    : leads;
+
+  // Analista Online / Presença no Topbar
+  const myAnalistaObj = analistasList.find(a => 
+    a.nome.toLowerCase().includes(currentAnalistaNome.toLowerCase()) || 
+    currentAnalistaNome.toLowerCase().includes(a.nome.toLowerCase())
+  );
+  const myStatusOnline = myAnalistaObj ? myAnalistaObj.isOnline : true;
+  const onlineAnalistasCount = analistasList.filter(a => a.isOnline).length;
+
+  const handleToggleMyStatus = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const nextStatus = !myStatusOnline;
+    const updated = setAnalistaStatus('me', nextStatus, currentAnalistaNome);
+    setAnalistasList(updated);
+    showToast(`Seu status agora é: ${nextStatus ? '🟢 Online' : '⚪ Offline'}`, 'success');
+  };
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      await fetchLeads();
+      setAnalistasList(getAnalistasPresenca());
+      showToast('Pastas e métricas sincronizadas!', 'success');
+    } catch {
+      showToast('Erro ao sincronizar.', 'error');
+    } finally {
+      setTimeout(() => setIsSyncing(false), 600);
+    }
+  };
+
+  const analistaInitials = currentAnalistaNome
+    .split(' ')
+    .filter(Boolean)
+    .map(n => n[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'DH';
+
+  const analistaFirstName = currentAnalistaNome.split(' ')[0].toUpperCase();
+
   // Productivity Metrics
-  const totalLeadsCount = leads.length;
-  const totalImovelValue = leads.reduce((acc, lead) => acc + Number(lead.valor_imovel), 0);
-  const leadsInConclusao = leads.filter((l) => l.etapa === 'Conclusao').length;
+  const totalLeadsCount = dashboardLeads.length;
+  const totalImovelValue = dashboardLeads.reduce((acc, lead) => acc + Number(lead.valor_imovel), 0);
+  const leadsInConclusao = dashboardLeads.filter((l) => l.etapa === 'Conclusao').length;
   const creditApprovalRate = (() => {
-    const analyzedLeads = leads.filter((l) => l.resultado_analise);
+    const analyzedLeads = dashboardLeads.filter((l) => l.resultado_analise);
     if (analyzedLeads.length === 0) return 0;
     const approvedLeads = analyzedLeads.filter((l) => l.resultado_analise === 'Aprovado').length;
     return Math.round((approvedLeads / analyzedLeads.length) * 100);
   })();
 
   // CorPay calculations
-  const corPayTotal = leads.reduce((acc, lead) => {
+  const corPayTotal = dashboardLeads.reduce((acc, lead) => {
     if (!lead.adicionado_corpay) return acc;
     if (lead.tipo_avaliacao === 'Reavaliação') return acc + 7;
     if (lead.tipo_avaliacao === 'Nova Avaliação') {
@@ -1021,7 +1078,7 @@ function App() {
     return acc;
   }, 0);
 
-  const corPayCount = leads.filter((l) => l.adicionado_corpay).length;
+  const corPayCount = dashboardLeads.filter((l) => l.adicionado_corpay).length;
 
   const formatCurrencyValue = (val: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -1234,130 +1291,150 @@ function App() {
         ))}
       </div>
 
-      {/* Sidebar Navigation */}
+      {/* Sidebar Navigation - Estilo Dark Mode AIOS */}
       <div className="sidebar">
+        {/* Logo Squircle com Degradê Neon + CORPSA + Subtítulo do Analista */}
         <div className="sidebar-logo">
-          <div className="logo-icon">C</div>
+          <div className="logo-squircle-gradient">C</div>
           <div>
             <div className="logo-text">CORPSA</div>
-            <div className="logo-subtext">Assessoria de Crédito</div>
+            <div className="logo-subtext">{analistaFirstName} • ANALISTA</div>
           </div>
         </div>
 
-        <button className="btn-new-lead" onClick={() => setShowAddModal(true)}>
+        {/* Botão de Destaque para Cadastrar Lead */}
+        <button className="btn-sidebar-create" onClick={() => setShowAddModal(true)}>
           <FiPlus size={18} />
-          CADASTRAR LEAD
+          <span>CADASTRAR LEAD</span>
         </button>
 
-        <button 
-          className="btn-new-lead" 
-          onClick={() => setShowStickyNotes(prev => !prev)}
-          style={{ 
-            backgroundColor: showStickyNotes ? 'var(--color-primary)' : 'rgba(99, 102, 241, 0.05)', 
-            color: showStickyNotes ? 'white' : 'var(--color-text-dark)', 
-            border: showStickyNotes ? 'none' : '1px solid var(--color-border)',
-            marginTop: '-12px',
-            marginBottom: '16px',
-            boxShadow: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            justifyContent: 'flex-start'
-          }}
-        >
-          <FiCheckSquare size={18} />
-          <span>PENDÊNCIAS</span>
-          {stickyNotes.filter(n => !n.completed).length > 0 && (
-            <span 
-              style={{
-                backgroundColor: showStickyNotes ? 'white' : '#ef4444',
-                color: showStickyNotes ? 'var(--color-primary)' : 'white',
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                borderRadius: '9999px',
-                padding: '2px 6px',
-                marginLeft: 'auto',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                minWidth: '16px',
-                height: '16px'
-              }}
-            >
-              {stickyNotes.filter(n => !n.completed).length}
-            </span>
-          )}
-        </button>
-
-        <button 
-          className="btn-new-lead" 
-          onClick={() => setCurrentTab('apuracao_renda')}
-          style={{ 
-            backgroundColor: currentTab === 'apuracao_renda' ? '#10b981' : '#0284c7', 
-            color: 'white', 
-            border: 'none',
-            marginTop: '-8px',
-            marginBottom: '16px',
-            boxShadow: '0 4px 12px rgba(2, 132, 199, 0.3)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            justifyContent: 'flex-start',
-            cursor: 'pointer'
-          }}
-        >
-          <FiFileText size={18} />
-          <span>APURAÇÃO DE RENDA</span>
-        </button>
+        {/* Categoria OPERAÇÃO */}
+        <div className="sidebar-section-title">OPERAÇÃO</div>
 
         <div className="sidebar-nav">
           <button 
             className={`nav-item ${currentTab === 'kanban' ? 'active' : ''}`}
             onClick={() => setCurrentTab('kanban')}
-            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}
+            style={{ background: 'none', width: '100%' }}
           >
-            <FiGrid size={18} />
-            Fluxo Kanban
+            <div className="nav-item-left">
+              <FiGrid size={17} />
+              <span>Painel / Kanban</span>
+            </div>
           </button>
+
           <button 
             className={`nav-item ${currentTab === 'dashboard' ? 'active' : ''}`}
             onClick={() => setCurrentTab('dashboard')}
-            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}
+            style={{ background: 'none', width: '100%' }}
           >
-            <FiActivity size={18} />
-            Dashboard / Métricas
+            <div className="nav-item-left">
+              <FiActivity size={17} />
+              <span>Dashboard de Pastas</span>
+            </div>
           </button>
+
           <button 
             className={`nav-item ${currentTab === 'apuracao_renda' ? 'active' : ''}`}
             onClick={() => setCurrentTab('apuracao_renda')}
-            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}
+            style={{ background: 'none', width: '100%' }}
           >
-            <FiFileText size={18} />
-            Apuração de Renda
+            <div className="nav-item-left">
+              <FiFileText size={17} />
+              <span>Apuração de Renda</span>
+            </div>
           </button>
+
           <button 
             className={`nav-item ${currentTab === 'agente_ia' ? 'active' : ''}`}
             onClick={() => setCurrentTab('agente_ia')}
-            style={{ background: 'none', border: 'none', width: '100%', textAlign: 'left' }}
+            style={{ background: 'none', width: '100%' }}
           >
-            <FiCpu size={18} />
-            Agente de IA (Chat Teste)
+            <div className="nav-item-left">
+              <FiCpu size={17} />
+              <span>Agente de IA</span>
+            </div>
+          </button>
+
+          <button 
+            className={`nav-item ${showStickyNotes ? 'active' : ''}`}
+            onClick={() => setShowStickyNotes(prev => !prev)}
+            style={{ background: 'none', width: '100%' }}
+          >
+            <div className="nav-item-left">
+              <FiCheckSquare size={17} />
+              <span>Pendências</span>
+            </div>
+            {stickyNotes.filter(n => !n.completed).length > 0 && (
+              <span className="badge-pill-orange">
+                {stickyNotes.filter(n => !n.completed).length}
+              </span>
+            )}
+          </button>
+
+          <button 
+            className="nav-item"
+            onClick={() => setShowConsultaRapidaDrawer(true)}
+            style={{ background: 'none', width: '100%' }}
+          >
+            <div className="nav-item-left">
+              <FiZap size={17} style={{ color: '#f59e0b' }} />
+              <span>Consultas Rápidas</span>
+            </div>
+            {consultasPendentesCount > 0 && (
+              <span className="badge-pill-orange">
+                {consultasPendentesCount}
+              </span>
+            )}
+          </button>
+
+          {/* Categoria GESTÃO */}
+          <div className="sidebar-section-title" style={{ marginTop: '12px' }}>GESTÃO</div>
+
+          <button 
+            className="nav-item"
+            onClick={() => setShowPresencePopover(prev => !prev)}
+            style={{ background: 'none', width: '100%' }}
+          >
+            <div className="nav-item-left">
+              <FiUsers size={17} />
+              <span>Equipe & Plantão</span>
+            </div>
+            <span style={{ fontSize: '0.7rem', color: myStatusOnline ? '#4ade80' : '#94a3b8', fontWeight: 700 }}>
+              {myStatusOnline ? 'Online' : 'Offline'}
+            </span>
+          </button>
+
+          <button 
+            className="nav-item"
+            onClick={() => { setShowProfileModal(true); setProfileTab('info'); }}
+            style={{ background: 'none', width: '100%' }}
+          >
+            <div className="nav-item-left">
+              <Settings size={17} />
+              <span>Configurações</span>
+            </div>
           </button>
         </div>
 
+        {/* Barra de Analistas Online Alinhada (Garante compatibilidade de suítes de teste) */}
+        <div style={{ marginTop: 'auto', marginBottom: '8px' }}>
+          <AnalistasOnlineBar currentUserName={userProfile?.nome_completo || 'Danilo Hasselmann'} />
+        </div>
+
+        {/* Rodapé da Sidebar com Perfil */}
         <div className="sidebar-footer">
           <div 
             className="user-profile" 
-            onClick={() => setShowProfileModal(true)}
-            style={{ cursor: 'pointer', transition: 'var(--transition-fast)' }}
-            title="Editar meu perfil / alterar senha"
+            onClick={() => setShowUserMenu(prev => !prev)}
+            title="Minha Conta / Perfil"
           >
             <div className="user-avatar">
-              {(userProfile?.nome_completo || 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+              {analistaInitials}
             </div>
             <div className="user-info">
               <span className="user-name">{userProfile?.nome_completo || session?.user?.email || 'Carregando...'}</span>
-              <span className="user-role">{userProfile?.cargo || 'Assessor'}</span>
+              <span className="user-role">{userProfile?.cargo || 'Analista de Crédito'}</span>
             </div>
           </div>
           <button className="btn-logout" onClick={handleLogout}>
@@ -1368,31 +1445,218 @@ function App() {
 
       {/* Main Content Area */}
       <div className="main-content">
-        <div className="header">
+        <header className="header">
+          {/* Campo de Busca estilo AIOS com Atalho ⌘K */}
           <div className="search-bar">
-            <FiSearch size={18} style={{ color: 'var(--color-text-muted)' }} />
+            <FiSearch size={16} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
             <input 
+              ref={searchInputRef}
               type="text" 
-              placeholder="Pesquisar por cliente, CPF, cidade ou resultado..." 
+              placeholder="Pesquisar por cliente, CPF, analista, cidade..." 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
+            <span className="search-shortcut-badge" title="Atalho: Pressione Ctrl+K ou ⌘K para focar no campo de busca">⌘K</span>
           </div>
 
+          {/* Ações da Direita estilo AIOS */}
           <div className="header-actions">
-            <div className="action-icon">
-              <FiHelpCircle />
+            {/* Pill 1: Status Online & Presença da Equipe */}
+            <div className="status-popover-wrapper" ref={presencePopoverRef}>
+              <button 
+                type="button" 
+                className="status-pill-online" 
+                onClick={() => setShowPresencePopover(prev => !prev)}
+                title="Status do Sistema e Analistas de Plantão"
+              >
+                <span className={`pulse-dot ${myStatusOnline ? 'pulse-green' : 'pulse-gray'}`} />
+                <span>CORPSA: {myStatusOnline ? 'Ativo' : 'Ausente'}</span>
+                <span className="pill-divider">•</span>
+                <FiUsers size={13} />
+                <span>{onlineAnalistasCount} online</span>
+                <ChevronDown size={13} style={{ opacity: 0.7, transform: showPresencePopover ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+              </button>
+
+              {/* Popover Dropdown da Equipe */}
+              {showPresencePopover && (
+                <div className="header-popover-menu presence-popover">
+                  <div className="popover-header">
+                    <div>
+                      <div className="popover-title">Equipe de Plantão</div>
+                      <div className="popover-subtitle">{onlineAnalistasCount} de {analistasList.length} analistas online</div>
+                    </div>
+                    <button 
+                      type="button"
+                      className={`btn-toggle-status ${myStatusOnline ? 'status-online' : 'status-offline'}`}
+                      onClick={handleToggleMyStatus}
+                      title="Clique para alternar seu status"
+                    >
+                      <Power size={11} />
+                      <span>{myStatusOnline ? 'Ficar Offline' : 'Ficar Online'}</span>
+                    </button>
+                  </div>
+
+                  <div className="popover-analistas-list">
+                    {analistasList.map(an => {
+                      const isMe = an.nome.toLowerCase() === currentAnalistaNome.toLowerCase();
+                      return (
+                        <div key={an.id} className="popover-analista-row">
+                          <div className="analista-info-cell">
+                            <span className={`status-circle ${an.isOnline ? 'online' : 'offline'}`} />
+                            <div>
+                              <span className="analista-nome">
+                                {an.nome} {isMe ? '(Você)' : ''}
+                              </span>
+                              <span className="analista-cargo">{an.cargo}</span>
+                            </div>
+                          </div>
+                          <span className={`status-tag ${an.isOnline ? 'online' : 'offline'}`}>
+                            {an.isOnline ? 'Disponível' : 'Offline'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Pill 2: Data e Hora em Tempo Real */}
+            <div className="datetime-pill">
+              <FiClock size={13} style={{ color: '#38bdf8' }} />
+              <span>{currentDateTimeStr}</span>
+            </div>
+
+            {/* Pill 3: Botão de Sincronização / Refresh com Giro */}
+            <button 
+              type="button" 
+              className={`btn-sync-refresh ${isSyncing ? 'spinning' : ''}`}
+              onClick={handleManualSync}
+              title="Sincronizar pastas e métricas agora"
+            >
+              <RotateCw size={15} />
+            </button>
+
+            {/* Pill 4: Avatar do Analista com Anel de Status e Menu */}
+            <div className="user-profile-topbar-wrapper" ref={profileMenuRef}>
+              <div 
+                className={`user-avatar-topbar ${myStatusOnline ? 'online-ring' : 'offline-ring'}`}
+                onClick={() => setShowUserMenu(prev => !prev)}
+                title="Meu Perfil / Conta"
+              >
+                <span>{analistaInitials}</span>
+              </div>
+
+              {/* Popover Menu do Analista */}
+              {showUserMenu && (
+                <div className="header-popover-menu profile-popover">
+                  <div className="profile-popover-header">
+                    <div className="avatar-large">{analistaInitials}</div>
+                    <div className="profile-popover-info">
+                      <div className="profile-popover-name">{userProfile?.nome_completo || currentAnalistaNome}</div>
+                      <div className="profile-popover-role">{userProfile?.cargo || 'Analista de Crédito'}</div>
+                      <div className="profile-popover-email">{session?.user?.email || 'analista@corpsa.com.br'}</div>
+                    </div>
+                  </div>
+
+                  <div className="profile-popover-divider" />
+
+                  <div className="profile-popover-status-toggle" onClick={handleToggleMyStatus}>
+                    <div className="toggle-label">
+                      <Power size={13} style={{ color: myStatusOnline ? '#4ade80' : '#94a3b8' }} />
+                      <span>Disponibilidade na Roleta</span>
+                    </div>
+                    <span className={`status-pill-badge ${myStatusOnline ? 'badge-green' : 'badge-gray'}`}>
+                      {myStatusOnline ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+
+                  <div className="profile-popover-divider" />
+
+                  <div className="profile-popover-links">
+                    <button 
+                      type="button" 
+                      className="popover-link-item"
+                      onClick={() => { setShowUserMenu(false); setShowProfileModal(true); setProfileTab('info'); }}
+                    >
+                      <User size={14} />
+                      <span>Editar Meu Perfil</span>
+                    </button>
+                    <button 
+                      type="button" 
+                      className="popover-link-item"
+                      onClick={() => { setShowUserMenu(false); setShowProfileModal(true); setProfileTab('password'); }}
+                    >
+                      <KeyRound size={14} />
+                      <span>Alterar Senha</span>
+                    </button>
+                    <button 
+                      type="button" 
+                      className="popover-link-item logout-link"
+                      onClick={() => { setShowUserMenu(false); handleLogout(); }}
+                    >
+                      <LogOut size={14} />
+                      <span>Sair do Sistema</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        </div>
+        </header>
 
         {/* Dynamic tabs */}
         <div className="content-viewport">
           {currentTab === 'dashboard' ? (
             // Dashboard View
             <>
-              <div className="view-header">
-                <h1 className="view-title">Dashboard de Produtividade</h1>
+              <div className="view-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h1 className="view-title" style={{ margin: 0 }}>Dashboard de Produtividade</h1>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                    {dashboardScope === 'me'
+                      ? `Exibindo métricas exclusivas das suas pastas como analista responsável (${currentAnalistaNome})`
+                      : 'Visão agregada de todas as pastas de todos os analistas'}
+                  </p>
+                </div>
+
+                {/* Seletor de Escopo: Único por Usuário (Regra de Negócio) vs Geral */}
+                <div style={{ display: 'flex', backgroundColor: '#e2e8f0', borderRadius: '8px', padding: '3px', gap: '2px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardScope('me')}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: dashboardScope === 'me' ? '#0a192f' : 'transparent',
+                      color: dashboardScope === 'me' ? '#ffffff' : '#475569',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    Minhas Pastas ({leads.filter(l => getAnalistaResponsavel(l, currentAnalistaNome).toLowerCase().includes(currentAnalistaNome.toLowerCase())).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardScope('all')}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: dashboardScope === 'all' ? '#0a192f' : 'transparent',
+                      color: dashboardScope === 'all' ? '#ffffff' : '#475569',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    Todas as Pastas ({leads.length})
+                  </button>
+                </div>
               </div>
 
               <div className="dashboard-grid">
@@ -1402,7 +1666,7 @@ function App() {
                     <FiUsers size={18} style={{ color: 'var(--color-roleta)' }} />
                   </div>
                   <div className="metric-value">{totalLeadsCount}</div>
-                  <div className="metric-footer">Leads cadastrados na base</div>
+                  <div className="metric-footer">{dashboardScope === 'me' ? 'Pastas sob sua responsabilidade' : 'Leads cadastrados na base'}</div>
                 </div>
 
                 <div className="metric-card">
@@ -1411,7 +1675,7 @@ function App() {
                     <FiDollarSign size={18} style={{ color: 'var(--color-conclusao)' }} />
                   </div>
                   <div className="metric-value">R$ {corPayTotal},00</div>
-                  <div className="metric-footer">{corPayCount} pastas integradas ao CorPay</div>
+                  <div className="metric-footer">{corPayCount} pastas suas no CorPay</div>
                 </div>
 
                 <div className="metric-card">
@@ -1420,7 +1684,7 @@ function App() {
                     <FiDollarSign size={18} style={{ color: 'var(--color-pendencia)' }} />
                   </div>
                   <div className="metric-value">{formatCurrencyValue(totalImovelValue)}</div>
-                  <div className="metric-footer">Soma dos imóveis sob análise</div>
+                  <div className="metric-footer">Soma dos imóveis sob sua gestão</div>
                 </div>
 
                 <div className="metric-card">
@@ -1448,7 +1712,7 @@ function App() {
                   <h3 style={{ marginBottom: '16px', fontFamily: 'var(--font-display)', fontWeight: 600 }}>Distribuição por Coluna</h3>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {COLUMNS.map((col) => {
-                      const count = leads.filter(l => l.etapa === col.id).length;
+                      const count = dashboardLeads.filter(l => l.etapa === col.id).length;
                       const pct = totalLeadsCount > 0 ? (count / totalLeadsCount) * 100 : 0;
                       return (
                         <div key={col.id}>
@@ -1469,8 +1733,8 @@ function App() {
                   <h3 style={{ marginBottom: '16px', fontFamily: 'var(--font-display)', fontWeight: 600 }}>Resultados de Análise de Crédito</h3>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {['Aprovado', 'Condicionado', 'Reprovado', 'Segue Pendente de Documento'].map((res) => {
-                      const count = leads.filter(l => l.resultado_analise === res).length;
-                      const totalRes = leads.filter(l => l.resultado_analise).length;
+                      const count = dashboardLeads.filter(l => l.resultado_analise === res).length;
+                      const totalRes = dashboardLeads.filter(l => l.resultado_analise).length;
                       const pct = totalRes > 0 ? (count / totalRes) * 100 : 0;
                       return (
                         <div key={res}>
@@ -1489,14 +1753,103 @@ function App() {
               </div>
             </>
           ) : currentTab === 'agente_ia' ? (
-            <AgenteIAChatTab />
+            <AgenteIAChatTab 
+              userId={session?.user?.id}
+              currentUserName={currentAnalistaNome}
+              onOpenLead={(lead) => handleCardClick(lead)}
+            />
           ) : currentTab === 'apuracao_renda' ? (
             <ApuracaoRendaTab />
           ) : (
             // Kanban Flow View
             <>
-              <div className="view-header">
-                <h1 className="view-title">Fluxo Kanban</h1>
+              <div className="view-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <h1 className="view-title" style={{ margin: 0 }}>Fluxo Kanban</h1>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowConsultaRapidaDrawer(true)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      backgroundColor: '#f97316',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '7px 14px',
+                      fontSize: '0.82rem',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 8px rgba(249,115,22,0.35)',
+                      transition: 'transform 0.1s'
+                    }}
+                  >
+                    <FiZap size={16} />
+                    <span>⚡ CONSULTAS RÁPIDAS (ALERTA)</span>
+                    {consultasPendentesCount > 0 && (
+                      <span 
+                        style={{ 
+                          backgroundColor: '#ffffff', 
+                          color: '#ea580c', 
+                          borderRadius: '10px', 
+                          padding: '1px 6px', 
+                          fontSize: '0.72rem', 
+                          fontWeight: 900,
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                        }}
+                      >
+                        {consultasPendentesCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRequestNotification}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      backgroundColor: notificationPermission === 'granted' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                      color: notificationPermission === 'granted' ? '#34d399' : '#60a5fa',
+                      border: `1px solid ${notificationPermission === 'granted' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(59, 130, 246, 0.3)'}`,
+                      borderRadius: '8px',
+                      padding: '7px 12px',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                    title="Ativar som e notificações no navegador para novas pastas na Roleta (meta: consulta Serasa em até 5 min)"
+                  >
+                    <FiBell size={14} />
+                    {notificationPermission === 'granted' ? '🔔 Notificações & Som Ativos' : '🔔 Liberar Notificações'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playAlertChime();
+                      showToast('🎵 Teste de alerta sonoro emitido com sucesso!', 'success');
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      color: '#cbd5e1',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      borderRadius: '8px',
+                      padding: '7px 11px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                    title="Testar som de nova pasta"
+                  >
+                    <FiVolume2 size={14} />
+                    Testar Som
+                  </button>
+                </div>
               </div>
 
               {loading ? (
@@ -1524,11 +1877,19 @@ function App() {
                         </div>
 
                         <div className="column-cards">
-                          {colLeads.map((lead) => (
+                          {colLeads.map((lead) => {
+                            const slaInfo = getLeadSlaCountdown(lead.data_hora_entrada, lead.etapa);
+                            return (
                             <div 
                               key={lead.id} 
                               className="lead-card"
-                              style={isSlaDelayed(lead.data_hora_entrada, lead.etapa) ? { border: '1.5px solid #ef4444', boxShadow: '0 2px 8px rgba(239, 68, 68, 0.2)' } : {}}
+                              style={
+                                slaInfo.isOverdue 
+                                  ? { border: '1.5px solid #ef4444', boxShadow: '0 2px 8px rgba(239, 68, 68, 0.2)' } 
+                                  : slaInfo.isCountingDown
+                                  ? { border: '1.5px solid #f59e0b', boxShadow: '0 2px 8px rgba(245, 158, 11, 0.25)' }
+                                  : {}
+                              }
                               draggable={true}
                               onDragStart={(e) => handleDragStart(e, lead)}
                               onClick={() => handleCardClick(lead)}
@@ -1545,7 +1906,7 @@ function App() {
                                       {lead.prioridade}
                                     </span>
                                   )}
-                                  {isSlaDelayed(lead.data_hora_entrada, lead.etapa) && (
+                                  {slaInfo.isOverdue ? (
                                     <span 
                                       className="priority-badge priority-alta"
                                       style={{ 
@@ -1564,11 +1925,33 @@ function App() {
                                       <FiAlertCircle size={10} />
                                       SLA Atrasada
                                     </span>
-                                  )}
+                                  ) : slaInfo.isCountingDown ? (
+                                    <span 
+                                      className="priority-badge priority-media"
+                                      style={{ 
+                                        backgroundColor: '#fef3c7', 
+                                        color: '#b45309', 
+                                        border: '1px solid #fde68a',
+                                        fontWeight: 800,
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        padding: '2px 6px',
+                                        borderRadius: '4px',
+                                        fontSize: '0.65rem'
+                                      }}
+                                      title="Contagem regressiva de SLA (últimos 30 minutos na Roleta)"
+                                    >
+                                      <FiClock size={10} style={{ color: '#d97706' }} />
+                                      {slaInfo.label}
+                                    </span>
+                                  ) : null}
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                   {lead.etapa === 'Conclusao' && (
-                                    <FiCheckCircle style={{ color: 'var(--color-conclusao)' }} title="Processo concluído" />
+                                    <span title="Processo concluído" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                      <FiCheckCircle style={{ color: 'var(--color-conclusao)' }} size={16} />
+                                    </span>
                                   )}
                                   <button 
                                     type="button"
@@ -1600,7 +1983,71 @@ function App() {
                                   <FiClock size={11} style={{ color: '#6366f1' }} /> Roleta: {formatEntryTime(lead.data_hora_entrada)}
                                 </span>
                                 <span><FiMapPin size={12} /> {lead.cidade}</span>
-                                <span><FiFileText size={12} /> CPF: {lead.cpf_cliente}</span>
+                                <span><FiFileText size={12} /> <strong>CPF:</strong> {lead.cpf_cliente || 'Pendente'}</span>
+                                {lead.mo_serasa && (
+                                  <span><FiShield size={12} style={{ color: '#0284c7' }} /> <strong>MO:</strong> {lead.mo_serasa}</span>
+                                )}
+
+                                {/* Serasa 5-Minute Warning Badge & Status */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                                  {lead.status_serasa === 'Sem Restrição' ? (
+                                    <span style={{ backgroundColor: '#dcfce7', color: '#15803d', fontSize: '0.68rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', border: '1px solid #86efac' }}>
+                                      ✅ Serasa: Sem Restrição
+                                    </span>
+                                  ) : lead.status_serasa === 'Com Restrição' ? (
+                                    <span style={{ backgroundColor: '#fee2e2', color: '#dc2626', fontSize: '0.68rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', border: '1px solid #fca5a5' }}>
+                                      ⚠️ Serasa: Restrição {lead.obs_serasa ? `(${lead.obs_serasa.substring(0, 18)})` : ''}
+                                    </span>
+                                  ) : lead.status_serasa === 'Consultado' ? (
+                                    <span style={{ backgroundColor: '#f1f5f9', color: '#475569', fontSize: '0.68rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', border: '1px solid #cbd5e1' }}>
+                                      📋 Serasa: Consultado
+                                    </span>
+                                  ) : (
+                                    (() => {
+                                      const elapsedMin = Math.floor((Date.now() - new Date(lead.data_hora_entrada).getTime()) / 60000);
+                                      const isOverdue = elapsedMin > 5;
+                                      return (
+                                        <span 
+                                          style={{ 
+                                            backgroundColor: isOverdue ? '#fee2e2' : '#e0f2fe', 
+                                            color: isOverdue ? '#b91c1c' : '#0369a1', 
+                                            fontSize: '0.68rem', 
+                                            fontWeight: 700, 
+                                            padding: '2px 6px', 
+                                            borderRadius: '4px',
+                                            border: `1px solid ${isOverdue ? '#fca5a5' : '#bae6fd'}`,
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px'
+                                          }}
+                                          title="Meta de consulta Serasa em até 5 minutos após a chegada da pasta na Roleta"
+                                        >
+                                          {isOverdue ? `🚨 Serasa > 5min (${elapsedMin}m)` : `⚡ Serasa: ${Math.max(0, 5 - elapsedMin)}m rest.`}
+                                        </span>
+                                      );
+                                    })()
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenSerasaModal(lead);
+                                    }}
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      backgroundColor: '#f8fafc',
+                                      border: '1px solid #cbd5e1',
+                                      borderRadius: '4px',
+                                      padding: '2px 6px',
+                                      cursor: 'pointer',
+                                      fontWeight: 600,
+                                      color: '#0284c7'
+                                    }}
+                                  >
+                                    🔍 Consultar Serasa
+                                  </button>
+                                </div>
                                 {lead.descricao_pendencia && (
                                   <span style={{ color: 'var(--color-pendencia)', fontWeight: 500, marginTop: '4px' }}>
                                     Exigência: {lead.descricao_pendencia.substring(0, 45)}{lead.descricao_pendencia.length > 45 ? '...' : ''}
@@ -1615,6 +2062,39 @@ function App() {
                                     Result: {lead.resultado_analise}
                                   </span>
                                 )}
+
+                                {/* Analista Responsável com indicador Online/Ausente */}
+                                {(() => {
+                                  const resp = getAnalistaResponsavel(lead, currentAnalistaNome);
+                                  const isOnline = isAnalistaOnline(resp);
+                                  return (
+                                    <div 
+                                      style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        justifyContent: 'space-between', 
+                                        marginTop: '6px', 
+                                        paddingTop: '6px', 
+                                        borderTop: '1px dashed #e2e8f0', 
+                                        fontSize: '0.68rem' 
+                                      }}
+                                    >
+                                      <span style={{ color: '#64748b', fontWeight: 600 }}>Analista:</span>
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 800, color: '#0f172a' }}>
+                                        <span 
+                                          style={{ 
+                                            width: '6px', 
+                                            height: '6px', 
+                                            borderRadius: '50%', 
+                                            backgroundColor: isOnline ? '#22c55e' : '#f59e0b' 
+                                          }} 
+                                          title={isOnline ? 'Online' : 'Ausente'}
+                                        />
+                                        {resp}
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
                                 {lead.adicionado_corpay && (
                                   <span style={{ 
                                     backgroundColor: '#ecfdf5', 
@@ -1641,7 +2121,8 @@ function App() {
                                 </span>
                               </div>
                             </div>
-                          ))}
+                          );
+                        })}
                         </div>
                       </div>
                     );
@@ -1653,215 +2134,149 @@ function App() {
         </div>
       </div>
 
-      {/* Modal: Add Lead */}
+      {/* Modal: Criação Rápida via Mensagem do Corretor (R1) */}
       {showAddModal && (
         <div className="modal-overlay">
-          <div className="modal" style={{ width: addLeadStep === 2 ? '650px' : '500px', maxWidth: '95%' }}>
+          <div className="modal" style={{ width: '580px', maxWidth: '95%' }}>
             <div className="modal-header">
-              <h2 className="modal-title">
-                {addLeadStep === 1 ? 'Cadastrar Novo Lead' : 'Revisar e Confirmar Lead'}
-              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FiFileText style={{ color: 'var(--color-primary)' }} size={20} />
+                <h2 className="modal-title">Criação Rápida via Mensagem do Corretor</h2>
+              </div>
               <button 
                 className="modal-close" 
                 onClick={() => { 
                   setShowAddModal(false); 
                   setRawText(''); 
                   setAddFormErrors({}); 
-                  setAddLeadStep(1);
                 }}
               >
                 <FiX size={20} />
               </button>
             </div>
-            <form onSubmit={handleAddLeadSubmit}>
-              <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto', padding: '20px 24px' }}>
-                {addLeadStep === 1 ? (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
-                      <FiFileText style={{ color: 'var(--color-primary)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Criação Rápida via Texto
-                      </span>
-                    </div>
+            <form onSubmit={handleQuickCreateSubmit}>
+              <div className="modal-body" style={{ padding: '20px 24px' }}>
+                <p style={{ fontSize: '0.82rem', color: '#64748b', margin: '0 0 14px 0', lineHeight: '1.45' }}>
+                  Cole abaixo o texto recebido do corretor (WhatsApp/Canal). O sistema extrai automaticamente o cliente, CPF, contato, renda, imóvel e triagem, cadastra na Roleta e abre o Dossiê completo imediatamente.
+                </p>
 
-                    <div className="form-group">
-                      <label htmlFor="raw_text">Bloco de Texto do Lead *</label>
-                      <textarea 
-                        id="raw_text"
-                        className="form-control" 
-                        rows={12}
-                        placeholder="Cole aqui o texto contendo as informações do lead (ex: mensagem do WhatsApp)..."
-                        value={rawText}
-                        onChange={(e) => setRawText(e.target.value)}
-                        style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}
-                      />
-                      {addFormErrors.raw_text && (
-                        <span className="form-error" style={{ display: 'block', marginTop: '4px' }}>
-                          {addFormErrors.raw_text}
-                        </span>
-                      )}
+                {/* Alerta de CPF Duplicado com botão de redirecionamento */}
+                {duplicateLeadFound && (
+                  <div 
+                    style={{ 
+                      backgroundColor: '#fff7ed', 
+                      border: '1.5px solid #f97316', 
+                      borderRadius: '10px', 
+                      padding: '14px 16px', 
+                      marginBottom: '16px',
+                      boxShadow: '0 4px 12px rgba(249, 115, 22, 0.15)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#c2410c', fontWeight: 800, fontSize: '0.85rem', marginBottom: '6px' }}>
+                      <FiAlertCircle size={18} />
+                      <span>Já possui um cliente com esse CPF em nossa base!</span>
                     </div>
-                  </>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                    {/* Section 1: Client Info */}
-                    <div>
-                      <h3 style={{ fontSize: '0.85rem', color: 'var(--color-primary)', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Informações do Cliente
-                      </h3>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                        <div className="form-group">
-                          <label htmlFor="nome_cliente" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Nome do Cliente *</label>
-                          <input 
-                            type="text" 
-                            id="nome_cliente"
-                            className="form-control"
-                            style={addFormErrors.nome_cliente ? { borderColor: '#ef4444' } : {}}
-                            value={parsedLeadForm.nome_cliente} 
-                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, nome_cliente: e.target.value }))}
-                          />
-                          {addFormErrors.nome_cliente && <span className="form-error">{addFormErrors.nome_cliente}</span>}
-                        </div>
-                        <div className="form-group">
-                          <label htmlFor="cpf_cliente" style={{ fontWeight: 600, fontSize: '0.85rem' }}>CPF do Cliente *</label>
-                          <input 
-                            type="text" 
-                            id="cpf_cliente"
-                            className="form-control"
-                            style={addFormErrors.cpf_cliente ? { borderColor: '#ef4444' } : {}}
-                            value={parsedLeadForm.cpf_cliente} 
-                            onChange={handleCpfChange}
-                            placeholder="000.000.000-00"
-                          />
-                          {addFormErrors.cpf_cliente && <span className="form-error">{addFormErrors.cpf_cliente}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Section 2: Property Info */}
-                    <div>
-                      <h3 style={{ fontSize: '0.85rem', color: 'var(--color-primary)', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Informações do Imóvel
-                      </h3>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                        <div className="form-group">
-                          <label htmlFor="valor_imovel" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Valor do Imóvel *</label>
-                          <input 
-                            type="text" 
-                            id="valor_imovel"
-                            className="form-control"
-                            style={addFormErrors.valor_imovel ? { borderColor: '#ef4444' } : {}}
-                            value={parsedLeadForm.valor_imovel} 
-                            onChange={(e) => handleValorChange(e.target.value)}
-                            placeholder="R$ 0,00"
-                          />
-                          {addFormErrors.valor_imovel && <span className="form-error">{addFormErrors.valor_imovel}</span>}
-                        </div>
-                        <div className="form-group">
-                          <label htmlFor="cidade" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Cidade / Localização *</label>
-                          <input 
-                            type="text" 
-                            id="cidade"
-                            className="form-control"
-                            style={addFormErrors.cidade ? { borderColor: '#ef4444' } : {}}
-                            value={parsedLeadForm.cidade} 
-                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, cidade: e.target.value }))}
-                          />
-                          {addFormErrors.cidade && <span className="form-error">{addFormErrors.cidade}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Section 3: Origin & Notes */}
-                    <div>
-                      <h3 style={{ fontSize: '0.85rem', color: 'var(--color-primary)', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Origem e Observações
-                      </h3>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '12px' }}>
-                        <div className="form-group">
-                          <label htmlFor="grupo_origem" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Grupo de Origem (WhatsApp/Canal) *</label>
-                          <input 
-                            type="text" 
-                            id="grupo_origem"
-                            className="form-control"
-                            style={addFormErrors.grupo_origem ? { borderColor: '#ef4444' } : {}}
-                            value={parsedLeadForm.grupo_origem} 
-                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, grupo_origem: e.target.value }))}
-                          />
-                          {addFormErrors.grupo_origem && <span className="form-error">{addFormErrors.grupo_origem}</span>}
-                        </div>
-                        <div className="form-group">
-                          <label htmlFor="analista" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Analista Responsável</label>
-                          <input 
-                            type="text" 
-                            id="analista"
-                            className="form-control"
-                            value={parsedLeadForm.analista} 
-                            onChange={(e) => setParsedLeadForm(prev => ({ ...prev, analista: e.target.value }))}
-                            placeholder="@NomeDoAnalista"
-                          />
-                        </div>
-                      </div>
-                      <div className="form-group" style={{ marginBottom: '12px' }}>
-                        <label htmlFor="servico" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Serviço / Modalidade</label>
-                        <select 
-                          id="servico"
-                          className="form-control"
-                          value={parsedLeadForm.servico}
-                          onChange={(e) => setParsedLeadForm(prev => ({ ...prev, servico: e.target.value }))}
-                          style={{ width: '100%', height: '42px' }}
-                        >
-                          <option value="AVALIAÇÃO">AVALIAÇÃO</option>
-                          <option value="REAVALIAÇÃO">REAVALIAÇÃO</option>
-                          <option value="NOVA AVALIAÇÃO">NOVA AVALIAÇÃO</option>
-                        </select>
-                      </div>
-                      <div className="form-group">
-                        <label htmlFor="notes" style={{ fontWeight: 600, fontSize: '0.85rem' }}>Informações Importantes (Notas)</label>
-                        <textarea 
-                          id="notes"
-                          className="form-control" 
-                          rows={4}
-                          value={parsedLeadForm.notes}
-                          onChange={(e) => setParsedLeadForm(prev => ({ ...prev, notes: e.target.value }))}
-                          placeholder="Informações adicionais..."
-                        />
-                      </div>
+                    <p style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#7c2d12', lineHeight: '1.4' }}>
+                      O CPF informado já pertence ao cliente <strong>{duplicateLeadFound.nome_cliente}</strong> (atualmente na etapa <strong>{duplicateLeadFound.etapa}</strong>). Deseja ir diretamente para o card existente?
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = duplicateLeadFound;
+                          setDuplicateLeadFound(null);
+                          setShowAddModal(false);
+                          setRawText('');
+                          handleCardClick(target);
+                        }}
+                        style={{
+                          backgroundColor: '#0a192f',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '6px',
+                          padding: '8px 14px',
+                          fontSize: '0.78rem',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          boxShadow: '0 2px 6px rgba(10, 25, 47, 0.25)'
+                        }}
+                      >
+                        <FiSearch size={14} style={{ color: '#f97316' }} />
+                        <span>Ir para o card existente ({duplicateLeadFound.nome_cliente})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDuplicateLeadFound(null)}
+                        style={{
+                          backgroundColor: '#ffffff',
+                          color: '#64748b',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: '6px',
+                          padding: '7px 12px',
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Fechar Alerta
+                      </button>
                     </div>
                   </div>
                 )}
+
+                <div className="form-group">
+                  <label htmlFor="raw_text" style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0f172a', marginBottom: '6px', display: 'block' }}>
+                    Mensagem do Corretor / Texto Bruto *
+                  </label>
+                  <textarea 
+                    id="raw_text"
+                    className="form-control" 
+                    rows={10}
+                    placeholder="Exemplo:&#10;[11:06] Grupo MRV Ribeirão:&#10;Cliente: CARLOS EDUARDO SILVA&#10;CPF: 12345678909&#10;Valor: 250k&#10;Renda: R$ 4.500,00&#10;Contato: 16998765432&#10;Obs: 3 anos FGTS, entrada parcelada."
+                    value={rawText}
+                    onChange={(e) => setRawText(e.target.value)}
+                    style={{ fontFamily: 'monospace', fontSize: '0.85rem', lineHeight: '1.45', padding: '12px', borderRadius: '8px' }}
+                    autoFocus
+                  />
+                  {addFormErrors.raw_text && (
+                    <span className="form-error" style={{ display: 'block', marginTop: '6px' }}>
+                      {addFormErrors.raw_text}
+                    </span>
+                  )}
+                </div>
               </div>
+
               <div className="modal-footer">
-                {addLeadStep === 1 ? (
-                  <>
-                    <button 
-                      type="button" 
-                      className="btn btn-secondary" 
-                      onClick={() => { 
-                        setShowAddModal(false); 
-                        setRawText(''); 
-                        setAddFormErrors({}); 
-                      }}
-                    >
-                      Cancelar
-                    </button>
-                    <button type="submit" className="btn btn-primary">Analisar e Avançar</button>
-                  </>
-                ) : (
-                  <>
-                    <button 
-                      type="button" 
-                      className="btn btn-secondary" 
-                      onClick={() => {
-                        setAddLeadStep(1);
-                        setAddFormErrors({});
-                      }}
-                    >
-                      Voltar
-                    </button>
-                    <button type="submit" className="btn btn-primary">Cadastrar</button>
-                  </>
-                )}
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={() => { 
+                    setShowAddModal(false); 
+                    setRawText(''); 
+                    setAddFormErrors({}); 
+                  }}
+                  disabled={addLoading}
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit" 
+                  className="btn btn-primary"
+                  disabled={addLoading}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    backgroundColor: '#f97316',
+                    borderColor: '#ea580c',
+                    fontWeight: 800
+                  }}
+                >
+                  {addLoading ? 'Cadastrando...' : '✨ Cadastrar & Abrir Dossiê'}
+                </button>
               </div>
             </form>
           </div>
@@ -1946,315 +2361,6 @@ function App() {
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => { setShowTransitionModal(false); setTransitionData(null); }}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Salvar e Mover</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: View & Edit Lead Details */}
-      {selectedLead && (
-        <div className="modal-overlay">
-          <div className="modal">
-            <div className="modal-header">
-              <h2 className="modal-title">
-                {selectedLead.etapa === 'Conclusao' ? 'Visualizar Lead (Concluído / Congelado)' : 'Visualizar e Editar Lead'}
-              </h2>
-              <button className="modal-close" onClick={() => setSelectedLead(null)}>
-                <FiX size={20} />
-              </button>
-            </div>
-            <form onSubmit={handleEditSubmit}>
-              <div className="modal-body">
-                {selectedLead.etapa === 'Conclusao' && (
-                  <div style={{ padding: '12px', backgroundColor: '#ecfdf5', color: '#065f46', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', border: '1px solid #a7f3d0' }}>
-                    <FiCheckCircle size={16} />
-                    <span>Este lead está na etapa de Conclusão. Você pode visualizar ou atualizar as informações livremente.</span>
-                  </div>
-                )}
-
-                {/* Prioridade do Lead */}
-                <div className="form-group" style={{ marginBottom: '16px' }}>
-                  <label htmlFor="edit_prioridade">Prioridade *</label>
-                  <select 
-                    id="edit_prioridade"
-                    className="form-control"
-                    value={editForm.prioridade || 'Baixa'}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, prioridade: e.target.value as 'Baixa' | 'Média' | 'Alta' }))}
-                  >
-                    <option value="Baixa">Baixa</option>
-                    <option value="Média">Média</option>
-                    <option value="Alta">Alta</option>
-                  </select>
-                </div>
-
-                {/* If stage is Roleta OR stage is Conclusao: show basic client & property fields */}
-                {(selectedLead.etapa === 'Roleta' || selectedLead.etapa === 'Conclusao') && (
-                  <>
-                    {/* Informações do Cliente */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
-                      <FiUsers style={{ color: 'var(--color-primary)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Informações do Cliente</span>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="edit_nome_cliente">Nome do Cliente *</label>
-                      <input 
-                        type="text" 
-                        id="edit_nome_cliente"
-                        className="form-control" 
-                        value={editForm.nome_cliente || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, nome_cliente: e.target.value }))}
-                      />
-                      {editFormErrors.nome_cliente && <span className="form-error">{editFormErrors.nome_cliente}</span>}
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: '16px' }}>
-                      <label htmlFor="edit_cpf_cliente">CPF do Cliente *</label>
-                      <input 
-                        type="text" 
-                        id="edit_cpf_cliente"
-                        className="form-control" 
-                        value={editForm.cpf_cliente || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, cpf_cliente: formatCPF(e.target.value) }))}
-                      />
-                      {editFormErrors.cpf_cliente && <span className="form-error">{editFormErrors.cpf_cliente}</span>}
-                    </div>
-
-                    {/* Informações do Imóvel */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', marginTop: '8px' }}>
-                      <FiHome style={{ color: 'var(--color-primary)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Informações do Imóvel</span>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="edit_valor_imovel">Valor do Imóvel *</label>
-                      <input 
-                        type="text" 
-                        id="edit_valor_imovel"
-                        className="form-control" 
-                        value={editForm.valor_imovel || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, valor_imovel: formatCurrency(e.target.value) }))}
-                      />
-                      {editFormErrors.valor_imovel && <span className="form-error">{editFormErrors.valor_imovel}</span>}
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: '16px' }}>
-                      <label htmlFor="edit_cidade">Cidade *</label>
-                      <input 
-                        type="text" 
-                        id="edit_cidade"
-                        className="form-control" 
-                        value={editForm.cidade || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, cidade: e.target.value }))}
-                      />
-                      {editFormErrors.cidade && <span className="form-error">{editFormErrors.cidade}</span>}
-                    </div>
-
-                    {/* Origem e Observações */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px', marginTop: '8px' }}>
-                      <FiFileText style={{ color: 'var(--color-primary)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Origem e Observações</span>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="edit_grupo_origem">Grupo de Origem (WhatsApp/Canal) *</label>
-                      <input 
-                        type="text" 
-                        id="edit_grupo_origem"
-                        className="form-control" 
-                        value={editForm.grupo_origem || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, grupo_origem: e.target.value }))}
-                      />
-                      {editFormErrors.grupo_origem && <span className="form-error">{editFormErrors.grupo_origem}</span>}
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: '16px' }}>
-                      <label htmlFor="edit_informacoes_importantes">Informações Importantes (Notas)</label>
-                      <textarea 
-                        id="edit_informacoes_importantes"
-                        className="form-control" 
-                        rows={2}
-                        value={editForm.informacoes_importantes || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, informacoes_importantes: e.target.value }))}
-                      />
-                    </div>
-                  </>
-                )}
-
-                {/* If stage is Pendencia OR stage is Conclusao: show Pendencia fields */}
-                {(selectedLead.etapa === 'Pendencia' || selectedLead.etapa === 'Conclusao') && (
-                  <div style={{ borderTop: (selectedLead.etapa === 'Conclusao') ? '1px dashed var(--color-border)' : 'none', paddingTop: (selectedLead.etapa === 'Conclusao') ? '16px' : '0' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
-                      <FiActivity style={{ color: 'var(--color-pendencia)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Demanda Operacional</span>
-                    </div>
-                    <div className="form-group" style={{ marginBottom: '16px' }}>
-                      <label htmlFor="edit_descricao_pendencia">O que falta para seguir com a análise? *</label>
-                      <textarea 
-                        id="edit_descricao_pendencia"
-                        className="form-control" 
-                        rows={3}
-                        value={editForm.descricao_pendencia || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, descricao_pendencia: e.target.value }))}
-                      />
-                      {editFormErrors.descricao_pendencia && <span className="form-error">{editFormErrors.descricao_pendencia}</span>}
-                    </div>
-                  </div>
-                )}
-
-                {/* If stage is Analise OR stage is Conclusao: show Analise fields */}
-                {(selectedLead.etapa === 'Analise' || selectedLead.etapa === 'Conclusao') && (
-                  <div style={{ borderTop: (selectedLead.etapa === 'Conclusao') ? '1px dashed var(--color-border)' : 'none', paddingTop: (selectedLead.etapa === 'Conclusao') ? '16px' : '0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
-                      <FiTrendingUp style={{ color: 'var(--color-analise)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Análise de Crédito</span>
-                    </div>
-                    
-                    <div className="form-group">
-                      <label htmlFor="edit_resultado_analise">Resultado da Análise *</label>
-                      <select 
-                        id="edit_resultado_analise"
-                        className="form-control"
-                        value={editForm.resultado_analise || ''}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, resultado_analise: e.target.value }))}
-                      >
-                        <option value="">Selecione...</option>
-                        <option value="Aprovado">Aprovado</option>
-                        <option value="Condicionado">Condicionado</option>
-                        <option value="Reprovado">Reprovado</option>
-                        <option value="Segue Pendente de Documento">Segue Pendente de Documento</option>
-                      </select>
-                      {editFormErrors.resultado_analise && <span className="form-error">{editFormErrors.resultado_analise}</span>}
-                    </div>
-
-                    {(editForm.resultado_analise === 'Condicionado' || 
-                      editForm.resultado_analise === 'Reprovado' || 
-                      editForm.resultado_analise === 'Segue Pendente de Documento') && (
-                      <div className="form-group" style={{ marginBottom: '16px' }}>
-                        <label htmlFor="edit_motivo_resultado">
-                          {editForm.resultado_analise === 'Segue Pendente de Documento' 
-                            ? 'Quais documentos estão pendentes? *' 
-                            : 'Motivo do Resultado / Detalhes *'}
-                        </label>
-                        <textarea 
-                          id="edit_motivo_resultado"
-                          className="form-control" 
-                          rows={2}
-                          placeholder={editForm.resultado_analise === 'Segue Pendente de Documento' 
-                            ? "Ex: RG legível, Comprovante de Residência..." 
-                            : "Motivos detalhados..."}
-                          value={editForm.motivo_resultado || ''}
-                          onChange={(e) => setEditForm(prev => ({ ...prev, motivo_resultado: e.target.value }))}
-                        />
-                        {editFormErrors.motivo_resultado && <span className="form-error">{editFormErrors.motivo_resultado}</span>}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* CorPay Launch Section (Only in Conclusao stage) */}
-                {selectedLead.etapa === 'Conclusao' && (
-                  <div style={{ borderTop: '2px solid var(--color-border)', marginTop: '20px', paddingTop: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--color-border)', paddingBottom: '6px', marginBottom: '12px' }}>
-                      <FiDollarSign style={{ color: 'var(--color-primary)' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-dark)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Lançamento no CorPay</span>
-                    </div>
-
-                    {selectedLead.adicionado_corpay ? (
-                      <div style={{ padding: '12px', backgroundColor: '#ecfdf5', color: '#065f46', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid #a7f3d0' }}>
-                        <FiCheckCircle size={18} />
-                        <span>Lançado no CorPay! Taxa: {
-                          selectedLead.tipo_avaliacao === 'Reavaliação' ? 'R$ 7,00' :
-                          selectedLead.tipo_financiamento === 'MCMV' ? 'R$ 12,00' : 'R$ 13,00'
-                        } ({selectedLead.tipo_avaliacao} {selectedLead.tipo_financiamento || ''}) - Categoria: {selectedLead.categoria || 'Não informada'}</span>
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        <div className="form-group">
-                          <label htmlFor="edit_tipo_avaliacao">Tipo de Avaliação *</label>
-                          <select
-                            id="edit_tipo_avaliacao"
-                            className="form-control"
-                            value={editForm.tipo_avaliacao}
-                            onChange={(e) => setEditForm(prev => ({ ...prev, tipo_avaliacao: e.target.value, tipo_financiamento: e.target.value === 'Reavaliação' ? '' : prev.tipo_financiamento }))}
-                          >
-                            <option value="">Selecione...</option>
-                            <option value="Reavaliação">Reavaliação (R$ 7,00)</option>
-                            <option value="Nova Avaliação">Nova Avaliação</option>
-                          </select>
-                          {editFormErrors.tipo_avaliacao && <span className="form-error">{editFormErrors.tipo_avaliacao}</span>}
-                        </div>
-
-                        <div className="form-group">
-                          <label htmlFor="edit_categoria">Categoria *</label>
-                          <select
-                            id="edit_categoria"
-                            className="form-control"
-                            value={editForm.categoria && !['Residencial', 'Comercial', 'Terreno'].includes(editForm.categoria) ? 'Outro' : editForm.categoria}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setEditForm(prev => ({ ...prev, categoria: val === 'Outro' ? 'Outro' : val }));
-                            }}
-                          >
-                            <option value="">Selecione...</option>
-                            <option value="Residencial">Residencial</option>
-                            <option value="Comercial">Comercial</option>
-                            <option value="Terreno">Terreno</option>
-                            <option value="Outro">Outro (especificar)</option>
-                          </select>
-                          {editFormErrors.categoria && <span className="form-error">{editFormErrors.categoria}</span>}
-                        </div>
-
-                        {(editForm.categoria === 'Outro' || (editForm.categoria && !['Residencial', 'Comercial', 'Terreno'].includes(editForm.categoria))) && (
-                          <div className="form-group" style={{ marginTop: '-4px' }}>
-                            <label htmlFor="edit_categoria_custom">Especificar Categoria *</label>
-                            <input
-                              type="text"
-                              id="edit_categoria_custom"
-                              className="form-control"
-                              placeholder="Ex: Misto, Galpão, etc."
-                              value={editForm.categoria === 'Outro' ? '' : editForm.categoria}
-                              onChange={(e) => setEditForm(prev => ({ ...prev, categoria: e.target.value }))}
-                            />
-                          </div>
-                        )}
-
-                        {editForm.tipo_avaliacao === 'Nova Avaliação' && (
-                          <div className="form-group">
-                            <label htmlFor="edit_tipo_financiamento">Tipo de Financiamento *</label>
-                            <select
-                              id="edit_tipo_financiamento"
-                              className="form-control"
-                              value={editForm.tipo_financiamento}
-                              onChange={(e) => setEditForm(prev => ({ ...prev, tipo_financiamento: e.target.value }))}
-                            >
-                              <option value="">Selecione...</option>
-                              <option value="MCMV">MCMV (R$ 12,00)</option>
-                              <option value="SBPE">SBPE (R$ 13,00)</option>
-                            </select>
-                            {editFormErrors.tipo_financiamento && <span className="form-error">{editFormErrors.tipo_financiamento}</span>}
-                          </div>
-                        )}
-
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          style={{ alignSelf: 'flex-start', marginTop: '8px', backgroundColor: 'var(--color-conclusao)' }}
-                          onClick={handleAddToCorPay}
-                        >
-                          Adicionar Pasta ao CorPay
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setSelectedLead(null)}>
-                  Fechar / Cancelar
-                </button>
-                <button type="submit" className="btn btn-primary">Salvar Alterações</button>
               </div>
             </form>
           </div>
@@ -2390,6 +2496,104 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Modal: Quick Consulta Serasa (SLA 5 Minutos) */}
+      {showSerasaModal && selectedSerasaLead && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: '520px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FiShield style={{ color: '#0284c7' }} size={20} />
+                <h2 className="modal-title">Consulta Serasa (SLA: 5 min)</h2>
+              </div>
+              <button className="modal-close" onClick={() => setShowSerasaModal(false)}>
+                <FiX size={20} />
+              </button>
+            </div>
+            <form onSubmit={handleSaveSerasa}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ padding: '10px 14px', backgroundColor: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0', fontSize: '0.8rem', color: '#166534' }}>
+                  <strong>Cliente:</strong> {selectedSerasaLead.nome_cliente} <br />
+                  <strong>Chegada na Roleta:</strong> {formatEntryTime(selectedSerasaLead.data_hora_entrada)}
+                </div>
+
+                <div className="form-group">
+                  <label style={{ fontWeight: 600, fontSize: '0.85rem' }}>CPF do Cliente *</label>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={serasaForm.cpf_cliente}
+                      onChange={(e) => setSerasaForm(prev => ({ ...prev, cpf_cliente: formatCPF(e.target.value) }))}
+                      placeholder="000.000.000-00"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        const cleanDigits = serasaForm.cpf_cliente.replace(/\D/g, '');
+                        if (cleanDigits) {
+                          navigator.clipboard.writeText(cleanDigits);
+                          showToast('CPF copiado para a área de transferência!', 'success');
+                        }
+                      }}
+                      title="Copiar CPF sem pontuação"
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      Copiar
+                    </button>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label style={{ fontWeight: 600, fontSize: '0.85rem' }}>Código MO (Margem / Mão de Obra)</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={serasaForm.mo_serasa}
+                    onChange={(e) => setSerasaForm(prev => ({ ...prev, mo_serasa: e.target.value }))}
+                    placeholder="Digite o código MO..."
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label style={{ fontWeight: 600, fontSize: '0.85rem' }}>Resultado da Consulta Serasa *</label>
+                  <select
+                    className="form-control"
+                    value={serasaForm.status_serasa}
+                    onChange={(e) => setSerasaForm(prev => ({ ...prev, status_serasa: e.target.value as any }))}
+                  >
+                    <option value="Pendente">⏳ Pendente de Consulta</option>
+                    <option value="Sem Restrição">✅ Sem Restrição (Score / Crédito Liberado)</option>
+                    <option value="Com Restrição">⚠️ Com Restrição (Possui Apontamentos / Dívidas)</option>
+                    <option value="Consultado">📋 Consultado (Outros)</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label style={{ fontWeight: 600, fontSize: '0.85rem' }}>Observações da Consulta / Detalhamento</label>
+                  <textarea
+                    className="form-control"
+                    rows={3}
+                    value={serasaForm.obs_serasa}
+                    onChange={(e) => setSerasaForm(prev => ({ ...prev, obs_serasa: e.target.value }))}
+                    placeholder="Detalhes sobre score, restrições encontradas ou valores..."
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowSerasaModal(false)}>Cancelar</button>
+                <button type="submit" className="btn btn-primary" disabled={serasaSaving}>
+                  {serasaSaving ? 'Salvando...' : 'Salvar Consulta Serasa'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Widget Flutuante de Pendências (Sticky Notes) */}
       {showStickyNotes && (
         <div 
@@ -2676,6 +2880,36 @@ function App() {
           )}
         </div>
       )}
+
+      {/* Modal de Dossiê Completo do Cliente com Ficha Caixa & Checklist CORPSA */}
+      {showFullDossierModal && fullDossierLead && (
+        <LeadDetailFullModal
+          lead={fullDossierLead}
+          isOpen={showFullDossierModal}
+          onClose={() => {
+            setShowFullDossierModal(false);
+            setFullDossierLead(null);
+          }}
+          onUpdateLead={(updated) => {
+            if (fullDossierLead) {
+              updateLeadStage(fullDossierLead.id, (updated.etapa || fullDossierLead.etapa) as any, updated);
+              setFullDossierLead(prev => prev ? ({ ...prev, ...updated }) : null);
+              showToast('Dossiê do cliente atualizado com sucesso!', 'success');
+            }
+          }}
+          currentAnalistaNome={userProfile?.nome_completo || 'Danilo Hasselmann'}
+        />
+      )}
+
+      {/* Popup de Consultas Rápidas (Compacto, direto e sem gerar card) */}
+      <ConsultaRapidaPopup
+        isOpen={showConsultaRapidaDrawer}
+        onClose={() => setShowConsultaRapidaDrawer(false)}
+        currentAnalistaNome={userProfile?.nome_completo || 'Danilo Hasselmann'}
+      />
+
+      {/* Alerta Flutuante em Tempo Real para Analistas Online */}
+      <ConsultaRapidaToastAlert onOpenPopup={() => setShowConsultaRapidaDrawer(true)} />
     </div>
   );
 }

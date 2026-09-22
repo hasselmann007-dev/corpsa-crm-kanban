@@ -142,7 +142,7 @@ const INITIAL_MOCK_SESSIONS: ApuracaoSessao[] = [
 ];
 
 // Helper to normalize diacritics for accent-insensitive search
-const normalizeText = (str: string) => {
+export const normalizeText = (str: string) => {
   return (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 };
 
@@ -189,6 +189,10 @@ export const ApuracaoRendaTab: React.FC = () => {
   const [newNome, setNewNome] = useState('');
   const [newCpf, setNewCpf] = useState('');
   const [inputMensagem, setInputMensagem] = useState('');
+  const [isChatSending, setIsChatSending] = useState(false);
+
+  // In-memory cache for real File instances attached in this browser session
+  const uploadedFilesMapRef = useRef<Map<string, File>>(new Map());
 
   const [analysisState, setAnalysisState] = useState<NlmAnalysisState>({
     status: 'idle',
@@ -286,7 +290,7 @@ export const ApuracaoRendaTab: React.FC = () => {
   // Auto scroll messages thread
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeSessao?.mensagens]);
+  }, [activeSessao?.mensagens, isChatSending]);
 
   // Filtered Sessions for Sidebar with safe navigation and accent normalization
   const normalizedSearch = normalizeText(searchTerm);
@@ -317,11 +321,11 @@ export const ApuracaoRendaTab: React.FC = () => {
       setAnalysisState({
         status: 'uploading',
         progressPercent: 30,
-        currentStepMessage: `Passo 1/3 [Uploading]: Enviando ${activeSessao.arquivos.length} documento(s) para o notebook central NotebookLM...`
+        currentStepMessage: `Passo 1/3 [Uploading]: Enviando ${activeSessao.arquivos.length} documento(s) para o caderno central do NotebookLM...`
       });
 
       // Step 2: Analyzing
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 800));
       setAnalysisState({
         status: 'analyzing',
         progressPercent: 65,
@@ -329,7 +333,7 @@ export const ApuracaoRendaTab: React.FC = () => {
       });
 
       // Step 3: Calculating
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 800));
       setAnalysisState({
         status: 'calculating',
         progressPercent: 90,
@@ -347,22 +351,37 @@ export const ApuracaoRendaTab: React.FC = () => {
       };
 
       try {
+        // Build FormData with real binary File objects when available
+        const formData = new FormData();
+        formData.append('sessionId', activeSessao.id);
+        formData.append('nomeCliente', activeSessao.nomeCliente);
+        formData.append('cpfCliente', activeSessao.cpfCliente);
+        formData.append('regrasConsiderar', activeSessao.regrasConsiderar);
+        formData.append('regrasDesconsiderar', activeSessao.regrasDesconsiderar);
+        formData.append('notebookId', 'af25c93d-d48c-4cba-a2f2-5991dcbbbc57');
+
+        let binaryFilesCount = 0;
+        for (const fileMeta of activeSessao.arquivos) {
+          const realFile = uploadedFilesMapRef.current.get(fileMeta.id);
+          if (realFile) {
+            formData.append('files', realFile, fileMeta.name);
+            binaryFilesCount++;
+          }
+        }
+
+        // If files are from existing history without in-memory binary blobs, send metadata array
+        if (binaryFilesCount === 0) {
+          formData.append('arquivos', JSON.stringify(activeSessao.arquivos));
+        }
+
         const response = await fetch('/api/nlm/analyze', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: activeSessao.id,
-            nomeCliente: activeSessao.nomeCliente,
-            cpfCliente: activeSessao.cpfCliente,
-            regrasConsiderar: activeSessao.regrasConsiderar,
-            regrasDesconsiderar: activeSessao.regrasDesconsiderar,
-            arquivos: activeSessao.arquivos
-          })
+          body: formData
         });
 
         if (response.ok) {
           const json = await response.json();
-          const dataPayload = json.data || json;
+          const dataPayload = json.result || json.data || json;
           resData = {
             rendaFormal: Number(dataPayload.rendaFormal ?? dataPayload.formalIncome ?? 0),
             rendaInformal: Number(dataPayload.rendaInformal ?? dataPayload.informalIncome ?? 0),
@@ -379,7 +398,7 @@ export const ApuracaoRendaTab: React.FC = () => {
             errText = errJson.message || errJson.error || '';
             if (errJson.error === 'AUTH_REQUIRED' || response.status === 401) {
               errText = "Autenticação necessária: Execute 'nlm login' no terminal para conectar a conta do NotebookLM.";
-            } else if (errJson.error === 'CLI_NOT_FOUND' || response.status === 500 && errText.includes('CLI')) {
+            } else if (errJson.error === 'CLI_NOT_FOUND' || (response.status === 500 && errText.includes('CLI'))) {
               errText = "CLI NotebookLM não encontrada. Execute 'uv tool install notebooklm-mcp-cli' no terminal.";
             }
           } catch {
@@ -525,18 +544,22 @@ export const ApuracaoRendaTab: React.FC = () => {
     }
   };
 
-  // Handle File Upload Simulation
+  // Handle File Upload and store binary instances in ref map
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0 || !activeSessao) return;
     const filesArray = Array.from(e.target.files);
     
-    const newDocs: ApuracaoArquivo[] = filesArray.map((f, idx) => ({
-      id: `f-${Date.now()}-${idx}`,
-      name: f.name,
-      size: `${(f.size / 1024 / 1024).toFixed(1)} MB`,
-      type: f.name.toLowerCase().endsWith('.pdf') ? 'PDF' : f.name.toLowerCase().endsWith('.png') || f.name.toLowerCase().endsWith('.jpg') ? 'Imagem' : 'Documento',
-      uploadedAt: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-    }));
+    const newDocs: ApuracaoArquivo[] = filesArray.map((f, idx) => {
+      const docId = `f-${Date.now()}-${idx}`;
+      uploadedFilesMapRef.current.set(docId, f);
+      return {
+        id: docId,
+        name: f.name,
+        size: `${(f.size / 1024 / 1024).toFixed(1)} MB`,
+        type: f.name.toLowerCase().endsWith('.pdf') ? 'PDF' : f.name.toLowerCase().endsWith('.png') || f.name.toLowerCase().endsWith('.jpg') ? 'Imagem' : 'Documento',
+        uploadedAt: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      };
+    });
 
     let targetToSync: ApuracaoSessao | null = null;
 
@@ -567,9 +590,10 @@ export const ApuracaoRendaTab: React.FC = () => {
     e.target.value = '';
   };
 
-  // Remove File
+  // Remove File and delete binary cache
   const handleRemoveFile = (fileId: string) => {
     if (!activeSessao) return;
+    uploadedFilesMapRef.current.delete(fileId);
     let targetToSync: ApuracaoSessao | null = null;
     setSessoes(prev => prev.map(s => {
       if (s.id === activeSessao.id) {
@@ -587,10 +611,10 @@ export const ApuracaoRendaTab: React.FC = () => {
     }
   };
 
-  // Send Message in Conversation Thread
-  const handleSendMessage = (e: React.FormEvent) => {
+  // Send Message in Conversation Thread (Invokes POST /api/nlm/chat)
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputMensagem.trim() || !activeSessao) return;
+    if (!inputMensagem.trim() || !activeSessao || isChatSending) return;
 
     const userText = inputMensagem.trim();
     const nowTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -602,61 +626,118 @@ export const ApuracaoRendaTab: React.FC = () => {
       timestamp: nowTime
     };
 
-    let newFormal = activeSessao.rendaFormal ?? 0;
-    let newInformal = activeSessao.rendaInformal ?? 0;
-    let newBruta = activeSessao.rendaBruta ?? (newFormal + newInformal);
-    let newLiquida = activeSessao.rendaLiquida ?? Math.max(0, newBruta - Math.round(newBruta * 0.12));
-    let newDescontos = activeSessao.descontosDesconsiderados ?? 0;
-
-    const textLower = userText.toLowerCase();
-    if (textLower.includes('desconsiderar') || textLower.includes('ignorar')) {
-      newDescontos += 300;
-      newLiquida += 300;
-    }
-    if (textLower.includes('comissão') || textLower.includes('informal')) {
-      newInformal += 800;
-      newBruta = newFormal + newInformal;
-      newLiquida += 650;
-    }
-    const newCapacidade = Math.round(newLiquida * 0.30);
-
-    const aiMsg: ApuracaoMensagem = {
-      id: `m-ai-${Date.now()}`,
-      sender: 'ai',
-      text: `Instrução processada: "${userText}". Recálculo de apuração atualizado:\n` +
-            `• Renda Formal: R$ ${newFormal.toLocaleString('pt-BR')}\n` +
-            `• Renda Informal: R$ ${newInformal.toLocaleString('pt-BR')}\n` +
-            `• Renda Bruta: R$ ${newBruta.toLocaleString('pt-BR')}\n` +
-            `• Renda Líquida Aprovável: R$ ${newLiquida.toLocaleString('pt-BR')} (Margem 30%: R$ ${newCapacidade.toLocaleString('pt-BR')}/mês).`,
-      timestamp: nowTime
-    };
-
-    let targetToSync: ApuracaoSessao | null = null;
-
+    // Optimistically update conversation history
     setSessoes(prev => prev.map(s => {
       if (s.id === activeSessao.id) {
-        const updated: ApuracaoSessao = {
+        return {
           ...s,
-          rendaFormal: newFormal,
-          rendaInformal: newInformal,
-          rendaBruta: newBruta,
-          rendaLiquida: newLiquida,
-          descontosDesconsiderados: newDescontos,
-          capacidadePagamento: newCapacidade,
-          status: 'Concluída',
-          mensagens: [...(s.mensagens || []), userMsg, aiMsg]
+          mensagens: [...(s.mensagens || []), userMsg]
         };
-        targetToSync = updated;
-        return updated;
       }
       return s;
     }));
 
-    if (targetToSync) {
-      syncSessionToSupabase(targetToSync);
-    }
-
     setInputMensagem('');
+    setIsChatSending(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('notebookId', 'af25c93d-d48c-4cba-a2f2-5991dcbbbc57');
+      formData.append('message', userText);
+      formData.append('regrasConsiderar', activeSessao.regrasConsiderar || '');
+      formData.append('regrasDesconsiderar', activeSessao.regrasDesconsiderar || '');
+      formData.append('currentMetrics', JSON.stringify({
+        rendaFormal: activeSessao.rendaFormal ?? 0,
+        rendaInformal: activeSessao.rendaInformal ?? 0,
+        rendaBruta: activeSessao.rendaBruta ?? 0,
+        descontosDesconsiderados: activeSessao.descontosDesconsiderados ?? 0,
+        rendaLiquida: activeSessao.rendaLiquida ?? 0,
+        capacidadePagamento: activeSessao.capacidadePagamento ?? 0
+      }));
+
+      let binaryFilesCount = 0;
+      if (activeSessao.arquivos && activeSessao.arquivos.length > 0) {
+        for (const fileMeta of activeSessao.arquivos) {
+          const realFile = uploadedFilesMapRef.current.get(fileMeta.id);
+          if (realFile) {
+            formData.append('files', realFile, fileMeta.name);
+            binaryFilesCount++;
+          }
+        }
+        if (binaryFilesCount === 0) {
+          formData.append('arquivos', JSON.stringify(activeSessao.arquivos));
+        }
+      }
+
+      const response = await fetch('/api/nlm/chat', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        let errMessage = `Erro HTTP ${response.status}`;
+        try {
+          const errJson = await response.json();
+          errMessage = errJson.message || errJson.error || errMessage;
+        } catch {}
+        throw new Error(errMessage);
+      }
+
+      const data = await response.json();
+      const aiText = data.reply || data.parecer || 'Instrução processada com sucesso no NotebookLM.';
+      const newMetrics = data.metrics || {};
+
+      const aiMsg: ApuracaoMensagem = {
+        id: `m-ai-${Date.now()}`,
+        sender: 'ai',
+        text: aiText,
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      };
+
+      let targetToSync: ApuracaoSessao | null = null;
+
+      setSessoes(prev => prev.map(s => {
+        if (s.id === activeSessao.id) {
+          const updated: ApuracaoSessao = {
+            ...s,
+            rendaFormal: newMetrics.rendaFormal !== undefined ? Number(newMetrics.rendaFormal) : s.rendaFormal,
+            rendaInformal: newMetrics.rendaInformal !== undefined ? Number(newMetrics.rendaInformal) : s.rendaInformal,
+            rendaBruta: newMetrics.rendaBruta !== undefined ? Number(newMetrics.rendaBruta) : s.rendaBruta,
+            descontosDesconsiderados: newMetrics.descontosDesconsiderados !== undefined ? Number(newMetrics.descontosDesconsiderados) : s.descontosDesconsiderados,
+            rendaLiquida: newMetrics.rendaLiquida !== undefined ? Number(newMetrics.rendaLiquida) : s.rendaLiquida,
+            capacidadePagamento: newMetrics.capacidadePagamento !== undefined ? Number(newMetrics.capacidadePagamento) : s.capacidadePagamento,
+            status: 'Concluída',
+            mensagens: [...(s.mensagens || []), aiMsg]
+          };
+          targetToSync = updated;
+          return updated;
+        }
+        return s;
+      }));
+
+      if (targetToSync) {
+        syncSessionToSupabase(targetToSync);
+      }
+    } catch (err: any) {
+      const errorMsg: ApuracaoMensagem = {
+        id: `m-err-${Date.now()}`,
+        sender: 'system',
+        text: `⚠️ Erro ao consultar NotebookLM: ${err.message || 'Falha de comunicação'}`,
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      };
+
+      setSessoes(prev => prev.map(s => {
+        if (s.id === activeSessao.id) {
+          return {
+            ...s,
+            mensagens: [...(s.mensagens || []), errorMsg]
+          };
+        }
+        return s;
+      }));
+    } finally {
+      setIsChatSending(false);
+    }
   };
 
   const isProcessing = analysisState.status !== 'idle' && analysisState.status !== 'complete' && analysisState.status !== 'error';
@@ -812,8 +893,29 @@ export const ApuracaoRendaTab: React.FC = () => {
                   {activeSessao.status || 'Em Análise'}
                 </span>
               </div>
-              <div style={{ fontSize: '0.825rem', color: '#64748b', marginTop: '2px' }}>
-                CPF: {activeSessao.cpfCliente || 'Não informado'} • Criado em {activeSessao.dataCriacao ? new Date(activeSessao.dataCriacao).toLocaleDateString('pt-BR') : '-'}
+              <div style={{ fontSize: '0.825rem', color: '#64748b', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span>CPF: {activeSessao.cpfCliente || 'Não informado'} • Criado em {activeSessao.dataCriacao ? new Date(activeSessao.dataCriacao).toLocaleDateString('pt-BR') : '-'}</span>
+                <a 
+                  href="https://notebooklm.google.com/notebook/af25c93d-d48c-4cba-a2f2-5991dcbbbc57" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  style={{ 
+                    fontSize: '0.72rem', 
+                    color: '#ea580c', 
+                    backgroundColor: '#fff7ed', 
+                    border: '1px solid #ffedd5',
+                    padding: '2px 8px', 
+                    borderRadius: '6px',
+                    textDecoration: 'none',
+                    fontWeight: 600,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="Abrir o caderno no Google NotebookLM"
+                >
+                  🔗 Notebook Conectado (af25c93d)
+                </a>
               </div>
             </div>
 
@@ -1095,7 +1197,7 @@ export const ApuracaoRendaTab: React.FC = () => {
               </div>
             </div>
 
-            {/* Section 3: Conversation Thread (History Log) */}
+            {/* Section 3: Conversation Thread (History Log & Interactive Chat) */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid var(--color-border)', padding: '16px', display: 'flex', flexDirection: 'column', minHeight: '260px' }}>
               <h4 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', fontWeight: 700, color: 'var(--color-text-dark)' }}>
                 Conversa & Histórico de Apuração
@@ -1125,6 +1227,26 @@ export const ApuracaoRendaTab: React.FC = () => {
                     </div>
                   </div>
                 ))}
+
+                {isChatSending && (
+                  <div 
+                    style={{
+                      alignSelf: 'flex-start',
+                      backgroundColor: '#f1f5f9',
+                      color: '#475569',
+                      padding: '10px 14px',
+                      borderRadius: '14px 14px 14px 2px',
+                      fontSize: '0.825rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    <FiLoader className="spinner" size={15} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-primary)' }} />
+                    <span>Consultando o NotebookLM e recalculando métricas...</span>
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
               </div>
 
@@ -1132,20 +1254,38 @@ export const ApuracaoRendaTab: React.FC = () => {
               <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '8px' }}>
                 <input 
                   type="text"
-                  placeholder="Escreva uma instrução ou pergunta para ajustar a apuração..."
+                  placeholder="Escreva uma instrução ou pergunta para ajustar a apuração no NotebookLM..."
                   value={inputMensagem}
                   onChange={(e) => setInputMensagem(e.target.value)}
+                  disabled={isChatSending}
                   style={{
                     flex: 1,
                     padding: '10px 14px',
                     borderRadius: '8px',
                     border: '1px solid var(--color-border)',
                     outline: 'none',
-                    fontSize: '0.85rem'
+                    fontSize: '0.85rem',
+                    backgroundColor: isChatSending ? '#f8fafc' : 'white'
                   }}
                 />
-                <button type="submit" className="btn btn-primary" style={{ padding: '0 16px', borderRadius: '8px' }}>
-                  <FiSend size={16} />
+                <button 
+                  type="submit" 
+                  className="btn btn-primary" 
+                  disabled={isChatSending || !inputMensagem.trim()}
+                  style={{ 
+                    padding: '0 16px', 
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: (isChatSending || !inputMensagem.trim()) ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  {isChatSending ? (
+                    <FiLoader className="spinner" size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                  ) : (
+                    <FiSend size={16} />
+                  )}
                 </button>
               </form>
             </div>
