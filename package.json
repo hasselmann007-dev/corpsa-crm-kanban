@@ -16,6 +16,7 @@
     "test:db": "tsx src/tests/testDatabasePersistenceAndRLS.ts",
     "test:obsidian": "tsx src/tests/testObsidianAndCrmTools.ts",
     "test:rules": "tsx src/tests/testBusinessRulesAccessAndOwnership.ts",
+    "test:simulator": "tsx src/tests/testAgentSimulatorAttachment.ts",
     "test": "npm run test:e2e"
   },
   "dependencies": {

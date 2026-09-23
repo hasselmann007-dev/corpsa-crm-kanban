@@ -113,7 +113,7 @@ const GEMINI_TOOLS_DECLARATION = [
       },
       {
         name: 'consultar_dados_cliente_crm',
-        description: 'Consulta os dados cadastrais e operacionais de um cliente/lead diretamente no banco de dados do CRM pelo CPF ou Nome. Retorna com exatidão os 4 blocos operacionais: 1) Observações Operacionais & Dados da Triagem; 2) Descrição e Detalhamento da Pendência; 3) Parecer Oficial do Analista de Crédito; 4) Considerações Finais & Instruções para Contrato.',
+        description: 'Consulta a situação da pasta de um cliente pelo CPF ou Nome no CRM. Retorna o status da pasta, etapa atual, pendências documentais e parecer do analista. Se o cliente estiver Aprovado, extrai automaticamente a simulação oficial Caixa e anexa o arquivo do simulador diretamente na conversa para o corretor baixar.',
         parameters: {
           type: 'OBJECT',
           properties: {
@@ -224,7 +224,7 @@ export async function chatWithGoogleGemini(
   customPrompt?: string,
   _customConstitution?: string,
   modelName: string = 'gemini-flash-latest'
-): Promise<{ text: string; model: string; latencyMs: number; toolUsed?: boolean; usage?: any }> {
+): Promise<{ text: string; model: string; latencyMs: number; toolUsed?: boolean; usage?: any; mediaAttachment?: any }> {
   const token = getGeminiApiKey(customKey);
   if (!token) {
     throw new Error('Chave API do Google Gemini não encontrada. Adicione GEMINI_API_KEY no arquivo .env.');
@@ -304,6 +304,8 @@ export async function chatWithGoogleGemini(
       const fnPart = allParts.find((p: any) => p.functionCall);
 
       // Caso 1: O modelo invocou a ferramenta (Function Call)
+      let mediaAttachmentToReturn: any = undefined;
+
       if (fnPart?.functionCall) {
         const fnCall = fnPart.functionCall;
         let toolResult = '';
@@ -315,6 +317,9 @@ export async function chatWithGoogleGemini(
           const id = fnCall.args?.identificador || fnCall.args?.cpf || fnCall.args?.nome || '';
           const dossie = await consultarDadosClienteCrm(id);
           toolResult = dossie.mensagemFormatada;
+          if (dossie.simuladorAnexo) {
+            mediaAttachmentToReturn = dossie.simuladorAnexo;
+          }
         } else if (fnCall.name === 'consultar_manual_constituicao') {
           const topico = fnCall.args?.topico || '';
           toolResult = executarFerramentaConstituicao(topico);
@@ -398,7 +403,8 @@ export async function chatWithGoogleGemini(
           model: `Gemini (${currentModel})`,
           latencyMs: Date.now() - startTime,
           toolUsed: true,
-          usage: secondData.usageMetadata
+          usage: secondData.usageMetadata,
+          mediaAttachment: mediaAttachmentToReturn
         };
       }
 
@@ -434,13 +440,31 @@ export async function chatWithGoogleGemini(
         });
       }
 
+      // Caso 2.2: Se o usuário perguntou sobre a situação de um cliente por CPF ou pediu simulador
+      const cpfMatchInMsg = lastUserMsg.match(/(\d{3}\.?\d{3}\.?\d{3}-?\d{2}|\d{11})/);
+      const isClientStatusIntent = /\b(?:como\s+est[aá]|situa[çc][ãa]o|status|pasta|aprovad[oa]|simulador|simula[çc][ãa]o|retorno|informa[çc][ãa]o|consult(?:e|ar))\b/i.test(lastUserMsg);
+
+      if (cpfMatchInMsg && (isClientStatusIntent || !isCreateCardIntent)) {
+        const cpfToQuery = cpfMatchInMsg[0];
+        const dossie = await consultarDadosClienteCrm(cpfToQuery);
+        if (dossie.encontrado) {
+          if (dossie.simuladorAnexo) {
+            mediaAttachmentToReturn = dossie.simuladorAnexo;
+          }
+          if (!replyText || replyText.length < 50) {
+            replyText = `Olá! Consultei a pasta de **${dossie.nome_cliente}** (CPF: ${dossie.cpf_cliente}) em nosso sistema:\n\n- **Etapa Atual:** ${dossie.etapa}\n- **Parecer Oficial:** ${dossie.parecer_oficial_analista}\n- **Pendências:** ${dossie.descricao_detalhamento_pendencia}\n\n${dossie.simuladorAnexo ? `✅ **Cliente Aprovado:** Extraí o simulador oficial Caixa da pasta e o arquivo **${dossie.simuladorAnexo.name}** já está anexado aqui na conversa para você baixar!` : ''}`;
+          }
+        }
+      }
+
       if (replyText) {
         return {
           text: replyText.trim(),
           model: currentModel,
           latencyMs: Date.now() - startTime,
           toolUsed: isCreateCardIntent,
-          usage: data.usageMetadata
+          usage: data.usageMetadata,
+          mediaAttachment: mediaAttachmentToReturn
         };
       }
 

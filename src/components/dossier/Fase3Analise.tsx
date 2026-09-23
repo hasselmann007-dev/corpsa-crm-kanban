@@ -265,24 +265,41 @@ export const Fase3Analise: React.FC<Fase3AnaliseProps> = ({
       )}
 
       {/* Se Aprovado ou Condicionado: Exibe a Ficha de Simulação Caixa & Checklist CORPSA */}
-      {resultadoAnalise !== 'Reprovado' && (
-        <FichaAprovacaoCaixa
-          key={`ficha-${lead.id}`}
-          initialData={{
-            cliente: lead.nome_cliente,
-            cpf: lead.cpf_cliente,
-            valor_imovel: lead.valor_imovel,
-            analista_responsavel: currentAnalistaNome,
-            tipo_imovel: 'Planta'
-          }}
-          onSave={(fichaData: FichaCaixaData) => {
-            onUpdateLead({
-              valor_imovel: fichaData.valor_imovel,
-              resultado_analise: resultadoAnalise
-            });
-          }}
-        />
-      )}
+      {resultadoAnalise !== 'Reprovado' && (() => {
+        let savedFicha: any = {};
+        const match = (lead.informacoes_importantes || '').match(/\[SIMULACAO_CAIXA:\s*(\{[\s\S]*?\})\s*\]/);
+        if (match && match[1]) {
+          try { savedFicha = JSON.parse(match[1]); } catch {}
+        }
+        return (
+          <FichaAprovacaoCaixa
+            key={`ficha-${lead.id}`}
+            initialData={{
+              cliente: lead.nome_cliente,
+              cpf: lead.cpf_cliente,
+              valor_imovel: lead.valor_imovel,
+              analista_responsavel: currentAnalistaNome,
+              tipo_imovel: 'Planta',
+              ...savedFicha
+            }}
+            onSave={(fichaData: FichaCaixaData) => {
+              let baseInfo = lead.informacoes_importantes || '';
+              const tagStr = `[SIMULACAO_CAIXA: ${JSON.stringify(fichaData)}]`;
+              if (/\[SIMULACAO_CAIXA:\s*\{[\s\S]*?\}\s*\]/.test(baseInfo)) {
+                baseInfo = baseInfo.replace(/\[SIMULACAO_CAIXA:\s*\{[\s\S]*?\}\s*\]/, tagStr);
+              } else {
+                baseInfo = `${baseInfo.trim()}\n${tagStr}`.trim();
+              }
+
+              onUpdateLead({
+                valor_imovel: fichaData.valor_imovel,
+                resultado_analise: resultadoAnalise,
+                informacoes_importantes: baseInfo
+              });
+            }}
+          />
+        );
+      })()}
     </div>
   );
 };

@@ -21,7 +21,8 @@ import {
   FiMusic,
   FiX,
   FiCheck,
-  FiLoader
+  FiLoader,
+  FiDownload
 } from 'react-icons/fi';
 import { supabase } from '../supabaseClient';
 import { 
@@ -611,9 +612,13 @@ export const AgenteIAChatTab: React.FC<AgenteIAChatTabProps> = ({
     const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
     // 🛑 REGRA DE NEGÓCIO: Verificação de Unicidade de CPF no Chat do Agente
+    // Intercepta apenas se for uma tentativa explícita de CADASTRAR/CRIAR um novo card com CPF já existente
+    const isCadastroIntent = /\b(?:cadastr(?:ar|e|o)|cri(?:ar|e|a[çc][ãa]o)|adicion(?:ar|e)|nov[oa]\s+(?:lead|cliente|pasta)|proposta\s+nov|inserir)\b/i.test(text);
+    const isConsultaIntent = /\b(?:como\s+est[aá]|situa[çc][ãa]o|status|informa[çc][ãa]o|consult(?:ar|e|a)|simulador|simula[çc][ãa]o|aprovad[oa]|pend[eê]ncia|onde\s+est[aá]|o\s+que\s+falta|qual\s+o\s+status|ver|detalhe|olh(?:e|ar)|buscar|pesquisar)\b/i.test(text);
+
     const rawDigits = text.replace(/\D/g, '');
     const cpfMatch = text.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/) || (rawDigits.length === 11 ? [rawDigits] : null);
-    if (cpfMatch) {
+    if (cpfMatch && isCadastroIntent && !isConsultaIntent) {
       const cleanDigits = cpfMatch[0].replace(/\D/g, '');
       if (cleanDigits.length === 11 && cleanDigits !== '00000000000') {
         const formattedCpf = `${cleanDigits.slice(0, 3)}.${cleanDigits.slice(3, 6)}.${cleanDigits.slice(6, 9)}-${cleanDigits.slice(9, 11)}`;
@@ -621,7 +626,7 @@ export const AgenteIAChatTab: React.FC<AgenteIAChatTabProps> = ({
           const { data: existingLead } = await supabase
             .from('leads')
             .select('*')
-            .eq('cpf_cliente', formattedCpf)
+            .or(`cpf_cliente.eq.${formattedCpf},cpf_cliente.eq.${cleanDigits}`)
             .limit(1)
             .maybeSingle();
 
@@ -829,6 +834,7 @@ export const AgenteIAChatTab: React.FC<AgenteIAChatTabProps> = ({
       // ETAPA 2: Execução do Agente CRM
       let agentReplyText = '';
       let agentModelUsed = selectedModel;
+      let agentMediaAttachment: ChatMediaAttachment | undefined = undefined;
 
       // Tenta via backend /api/agent/gemini-chat
       try {
@@ -848,6 +854,9 @@ export const AgenteIAChatTab: React.FC<AgenteIAChatTabProps> = ({
           if (bData.success && bData.text) {
             agentReplyText = bData.text;
             agentModelUsed = bData.model || selectedModel;
+            if (bData.mediaAttachment) {
+              agentMediaAttachment = bData.mediaAttachment;
+            }
           }
         }
       } catch (_backendErr) {
@@ -869,7 +878,8 @@ export const AgenteIAChatTab: React.FC<AgenteIAChatTabProps> = ({
         sender: 'agent',
         text: agentReplyText,
         modelUsed: agentModelUsed,
-        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        ...(agentMediaAttachment ? { mediaAttachment: agentMediaAttachment } : {})
       };
 
       setMessages(prev => [...prev, agentMsg]);
@@ -1069,6 +1079,12 @@ export const AgenteIAChatTab: React.FC<AgenteIAChatTabProps> = ({
             📋 Criar Card na Roleta
           </button>
           <button
+            onClick={() => handleApplyPreset('Olá! Como está a pasta do cliente MARCELO COSTA, CPF 298.112.443-10? Ele já foi aprovado e tem o simulador Caixa disponível?')}
+            style={{ fontSize: '0.72rem', backgroundColor: '#dcfce7', color: '#166534', border: '1px solid #86efac', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap', fontWeight: 600 }}
+          >
+            🎯 Consultar CPF & Simulador
+          </button>
+          <button
             onClick={() => handleApplyPreset('Solicito a consulta urgente de CPF, pesquisa de bens/imóvel e IRPF da cliente ALINE FERREIRA, CPF 412.556.789-01.')}
             style={{ fontSize: '0.72rem', backgroundColor: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap', fontWeight: 600 }}
           >
@@ -1159,22 +1175,61 @@ export const AgenteIAChatTab: React.FC<AgenteIAChatTabProps> = ({
                           />
                         </div>
                       )}
-                      {msg.mediaAttachment.type === 'pdf' && (
+                      {(msg.mediaAttachment.type === 'pdf' || msg.mediaAttachment.type === 'text') && (
                         <div 
                           style={{ 
                             display: 'flex', 
                             alignItems: 'center', 
-                            gap: '8px', 
-                            padding: '6px 10px', 
-                            backgroundColor: isUser ? 'rgba(255,255,255,0.2)' : '#f1f5f9', 
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: '10px', 
+                            padding: '8px 12px', 
+                            backgroundColor: isUser ? 'rgba(255,255,255,0.2)' : '#f8fafc', 
                             borderRadius: '8px',
+                            border: isUser ? '1px solid rgba(255,255,255,0.3)' : '1px solid #e2e8f0',
                             fontSize: '0.8rem',
                             fontWeight: 600
                           }}
                         >
-                          <FiFileText size={18} />
-                          <span>{msg.mediaAttachment.name}</span>
-                          {msg.mediaAttachment.size && <span style={{ opacity: 0.8, fontSize: '0.72rem' }}>({msg.mediaAttachment.size})</span>}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '180px' }}>
+                            <FiFileText size={20} color={isUser ? '#ffffff' : '#0284c7'} />
+                            <div>
+                              <div style={{ color: isUser ? '#ffffff' : '#0f172a' }}>{msg.mediaAttachment.name}</div>
+                              {msg.mediaAttachment.size && (
+                                <div style={{ opacity: 0.8, fontSize: '0.7rem', color: isUser ? '#e2e8f0' : '#64748b' }}>
+                                  {msg.mediaAttachment.size}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          {msg.mediaAttachment.url && (
+                            <a 
+                              href={msg.mediaAttachment.url} 
+                              download={msg.mediaAttachment.name || 'Simulacao_Caixa.doc'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ 
+                                display: 'inline-flex', 
+                                alignItems: 'center', 
+                                gap: '6px', 
+                                padding: '6px 14px', 
+                                backgroundColor: '#10b981', 
+                                color: '#ffffff', 
+                                borderRadius: '6px', 
+                                textDecoration: 'none', 
+                                fontSize: '0.78rem', 
+                                fontWeight: 700, 
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                boxShadow: '0 2px 6px rgba(16,185,129,0.3)',
+                                whiteSpace: 'nowrap'
+                              }}
+                              title="Baixar Simulador Caixa (.doc oficial para Word)"
+                            >
+                              <FiDownload size={15} />
+                              <span>Baixar Simulador Caixa</span>
+                            </a>
+                          )}
                         </div>
                       )}
                       {msg.mediaAttachment.transcribedText && (
