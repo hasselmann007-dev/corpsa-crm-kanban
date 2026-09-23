@@ -88,6 +88,8 @@ export function executarFerramentaConstituicao(topico?: string): string {
 }
 
 import { executarCriarCardKanban, executarSolicitarConsultaRapida, getRegrasAnaliseKanban } from './kanbanTool.js';
+import { consultarObsidianNormas } from './obsidianNormasTool.js';
+import { consultarDadosClienteCrm } from './crmConsultaTool.js';
 
 /**
  * Declarações de Ferramentas (Function Calling) do Google Gemini
@@ -95,6 +97,34 @@ import { executarCriarCardKanban, executarSolicitarConsultaRapida, getRegrasAnal
 const GEMINI_TOOLS_DECLARATION = [
   {
     functionDeclarations: [
+      {
+        name: 'consultar_obsidian_normas',
+        description: 'Consulta o cofre de conhecimento Obsidian (@Normas) da CORPSA e da Caixa Econômica Federal (normas de benefícios INSS aceitos e vedados, IRPF 2026, limites de comprometimento de renda por rating A/B/C/D, dependentes MCMV, municípios limítrofes para uso do FGTS nas RMs de Ribeirão Preto/Campinas/SP, tabelas de faixas de renda e taxas MCMV/SBPE, custas de engenharia e avaliação, procedimentos de renda informal e motoristas de aplicativo Uber/99/iFood, checklists de documentos e modelos). Você DEVE invocar esta ferramenta sempre que o usuário fizer perguntas técnicas ou operacionais sobre crédito imobiliário para responder com base estrita no acervo documentado.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            termo_ou_topico: {
+              type: 'STRING',
+              description: 'Tópico, dúvida ou palavra-chave para consulta no acervo Obsidian (ex: "benefícios INSS aceitos", "regra IRPF 2026", "rating comprometimento renda", "municipios limitrofes FGTS", "procedimento uber", "checklist documentos", etc.).'
+            }
+          },
+          required: ['termo_ou_topico']
+        }
+      },
+      {
+        name: 'consultar_dados_cliente_crm',
+        description: 'Consulta os dados cadastrais e operacionais de um cliente/lead diretamente no banco de dados do CRM pelo CPF ou Nome. Retorna com exatidão os 4 blocos operacionais: 1) Observações Operacionais & Dados da Triagem; 2) Descrição e Detalhamento da Pendência; 3) Parecer Oficial do Analista de Crédito; 4) Considerações Finais & Instruções para Contrato.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            identificador: {
+              type: 'STRING',
+              description: 'CPF (apenas números ou formatado) ou Nome do cliente a ser consultado no banco do CRM.'
+            }
+          },
+          required: ['identificador']
+        }
+      },
       {
         name: 'consultar_manual_constituicao',
         description: 'Consulta o Manual de Boas Práticas e a Constituição da CORPSA (regras de análise, rotina, SLAs de 2h para Construtora e 3h para Imobiliária, checklist, regras de devolução FYP/MRV/Direcional, tetos MCMV Faixa 2/3/4 e tabela de agências das construtoras). Use esta ferramenta SOMENTE quando precisar consultar dados ou regras da empresa.',
@@ -278,7 +308,14 @@ export async function chatWithGoogleGemini(
         const fnCall = fnPart.functionCall;
         let toolResult = '';
 
-        if (fnCall.name === 'consultar_manual_constituicao') {
+        if (fnCall.name === 'consultar_obsidian_normas') {
+          const topico = fnCall.args?.termo_ou_topico || fnCall.args?.topico || '';
+          toolResult = consultarObsidianNormas(topico);
+        } else if (fnCall.name === 'consultar_dados_cliente_crm') {
+          const id = fnCall.args?.identificador || fnCall.args?.cpf || fnCall.args?.nome || '';
+          const dossie = await consultarDadosClienteCrm(id);
+          toolResult = dossie.mensagemFormatada;
+        } else if (fnCall.name === 'consultar_manual_constituicao') {
           const topico = fnCall.args?.topico || '';
           toolResult = executarFerramentaConstituicao(topico);
         } else if (fnCall.name === 'criar_card_kanban') {

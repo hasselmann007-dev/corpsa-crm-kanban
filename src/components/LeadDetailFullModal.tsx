@@ -250,6 +250,7 @@ export const LeadDetailFullModal: React.FC<LeadDetailFullModalProps> = ({
               <Fase4ConclusaoCorPay 
                 lead={lead} 
                 onUpdateLead={onUpdateLead} 
+                currentAnalistaNome={currentAnalistaNome}
               />
             )}
           </main>

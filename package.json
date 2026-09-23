@@ -13,6 +13,9 @@
     "test:parse": "tsx src/parseTest.ts",
     "test:sla": "tsx src/slaTest.ts",
     "test:e2e": "tsx src/tests/e2eApuracaoRendaRunner.ts",
+    "test:db": "tsx src/tests/testDatabasePersistenceAndRLS.ts",
+    "test:obsidian": "tsx src/tests/testObsidianAndCrmTools.ts",
+    "test:rules": "tsx src/tests/testBusinessRulesAccessAndOwnership.ts",
     "test": "npm run test:e2e"
   },
   "dependencies": {

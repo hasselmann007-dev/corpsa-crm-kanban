@@ -73,7 +73,8 @@ import { AnalistasOnlineBar } from './components/AnalistasOnlineBar';
 import { LeadDetailFullModal } from './components/LeadDetailFullModal';
 import { getConsultasRapidas, getAnalistasPresenca, setAnalistaStatus } from './utils/consultaRapidaStore';
 import type { AnalistaPresenca } from './types/consultaRapida';
-import { getAnalistaResponsavel, isAnalistaOnline } from './utils/analistaResponsavel';
+import { getAnalistaResponsavel, isAnalistaOnline, registrarTrocaAnalista } from './utils/analistaResponsavel';
+import { extrairLancamentosCorPay, calcularRemuneracaoAnalista } from './utils/corpayStore';
 
 export interface Lead {
   id: string;
@@ -1110,28 +1111,60 @@ function App() {
     setShowFullDossierModal(true);
   };
 
-  // Filtered Leads
+  // Identificação do Analista Logado (Regra: Cada analista tem visão única de seu fluxo e CorPay)
+  const currentAnalistaNome = userProfile?.nome_completo?.trim() || 'Danilo Hasselmann';
+
+  const isLeadDoAnalista = (lead: Lead, analistaNome: string): boolean => {
+    const resp = getAnalistaResponsavel(lead, analistaNome);
+    const cleanResp = resp.toLowerCase().trim();
+    const cleanCurrent = analistaNome.toLowerCase().trim();
+    return cleanResp.includes(cleanCurrent) || cleanCurrent.includes(cleanResp);
+  };
+
+  // Filtered Leads para o Kanban:
+  // - Com busca ativa (searchQuery): busca em TODA a base da CORPSA (permite localizar pastas de outros analistas por CPF/Nome para pegar pendência/reavaliação)
+  // - Sem busca ativa: exibe ESTRITAMENTE as pastas sob responsabilidade do analista logado!
   const filteredLeads = leads.filter((lead) => {
     const query = searchQuery.toLowerCase().trim();
-    if (!query) return true;
-    return (
-      lead.nome_cliente.toLowerCase().includes(query) ||
-      lead.cidade.toLowerCase().includes(query) ||
-      lead.cpf_cliente.includes(query) ||
-      (lead.resultado_analise && lead.resultado_analise.toLowerCase().includes(query))
-    );
+    if (query) {
+      const resp = getAnalistaResponsavel(lead, currentAnalistaNome);
+      return (
+        lead.nome_cliente.toLowerCase().includes(query) ||
+        lead.cidade.toLowerCase().includes(query) ||
+        lead.cpf_cliente.includes(query) ||
+        resp.toLowerCase().includes(query) ||
+        (lead.resultado_analise && lead.resultado_analise.toLowerCase().includes(query))
+      );
+    }
+    return isLeadDoAnalista(lead, currentAnalistaNome);
   });
 
   // Escopo do Dashboard (Regra de Negócio: Dashboard de Pastas Único por Usuário)
-  const currentAnalistaNome = userProfile?.nome_completo || 'Danilo Hasselmann';
   const dashboardLeads = dashboardScope === 'me'
-    ? leads.filter((lead) => {
-        const resp = getAnalistaResponsavel(lead, currentAnalistaNome);
-        const cleanResp = resp.toLowerCase().trim();
-        const cleanCurrent = currentAnalistaNome.toLowerCase().trim();
-        return cleanResp.includes(cleanCurrent) || cleanCurrent.includes(cleanResp);
-      })
+    ? leads.filter((lead) => isLeadDoAnalista(lead, currentAnalistaNome))
     : leads;
+
+  // Ação rápida para assumir pasta de outro colega diretamente da busca global
+  const handleQuickAssumirPasta = async (e: React.MouseEvent, lead: Lead) => {
+    e.stopPropagation();
+    const { novoTextoInfo } = registrarTrocaAnalista(
+      lead,
+      currentAnalistaNome,
+      'Pegar Pendência',
+      'Assumido diretamente pela busca global'
+    );
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({ informacoes_importantes: novoTextoInfo })
+        .eq('id', lead.id);
+      if (error) throw error;
+      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, informacoes_importantes: novoTextoInfo } : l));
+      showToast(`Pasta de ${lead.nome_cliente} assumida com sucesso e adicionada ao seu Kanban!`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Erro ao assumir pasta.', 'error');
+    }
+  };
 
   // Analista Online / Presença no Topbar
   const myAnalistaObj = analistasList.find(a => 
@@ -1158,7 +1191,7 @@ function App() {
     } catch {
       showToast('Erro ao sincronizar.', 'error');
     } finally {
-      setTimeout(() => setIsSyncing(false), 600);
+      setIsSyncing(false);
     }
   };
 
@@ -1172,10 +1205,11 @@ function App() {
 
   const analistaFirstName = currentAnalistaNome.split(' ')[0].toUpperCase();
 
-  // Productivity Metrics
+  // Métricas do Dashboard e CorPay
   const totalLeadsCount = dashboardLeads.length;
-  const totalImovelValue = dashboardLeads.reduce((acc, lead) => acc + Number(lead.valor_imovel), 0);
   const leadsInConclusao = dashboardLeads.filter((l) => l.etapa === 'Conclusao').length;
+  const totalImovelValue = dashboardLeads.reduce((acc, lead) => acc + (lead.valor_imovel || 0), 0);
+
   const creditApprovalRate = (() => {
     const analyzedLeads = dashboardLeads.filter((l) => l.resultado_analise);
     if (analyzedLeads.length === 0) return 0;
@@ -1183,18 +1217,10 @@ function App() {
     return Math.round((approvedLeads / analyzedLeads.length) * 100);
   })();
 
-  // CorPay calculations
-  const corPayTotal = dashboardLeads.reduce((acc, lead) => {
-    if (!lead.adicionado_corpay) return acc;
-    if (lead.tipo_avaliacao === 'Reavaliação') return acc + 7;
-    if (lead.tipo_avaliacao === 'Nova Avaliação') {
-      if (lead.tipo_financiamento === 'MCMV') return acc + 12;
-      if (lead.tipo_financiamento === 'SBPE') return acc + 13;
-    }
-    return acc;
-  }, 0);
-
-  const corPayCount = dashboardLeads.filter((l) => l.adicionado_corpay).length;
+  // Métricas do CorPay: ESTRITAMENTE para o analista logado (POP-02: NUNCA mistura com outros analistas)
+  const corPayMetrics = calcularRemuneracaoAnalista(leads, currentAnalistaNome);
+  const corPayTotal = corPayMetrics.total;
+  const corPayCount = corPayMetrics.count;
 
   const formatCurrencyValue = (val: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -1968,6 +1994,44 @@ function App() {
                 </div>
               </div>
 
+              {/* Notificação de Busca Global no CRM */}
+              {searchQuery && (
+                <div style={{
+                  backgroundColor: 'rgba(2, 132, 199, 0.12)',
+                  border: '1px solid rgba(2, 132, 199, 0.35)',
+                  borderRadius: '8px',
+                  padding: '10px 16px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: '0.84rem',
+                  color: '#0284c7'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <FiSearch size={16} />
+                    <span>
+                      Busca global ativa por: "<strong>{searchQuery}</strong>" — <strong>{filteredLeads.length}</strong> pasta(s) localizada(s) em toda a base da CORPSA.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#0284c7',
+                      cursor: 'pointer',
+                      fontWeight: 800,
+                      textDecoration: 'underline',
+                      fontSize: '0.78rem'
+                    }}
+                  >
+                    ✕ Limpar busca (ver apenas meu Kanban)
+                  </button>
+                </div>
+              )}
+
               {loading ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '300px' }}>
                   <span>Carregando leads...</span>
@@ -2211,25 +2275,65 @@ function App() {
                                     </div>
                                   );
                                 })()}
-                                {lead.adicionado_corpay && (
-                                  <span style={{ 
-                                    backgroundColor: '#ecfdf5', 
-                                    color: '#065f46', 
-                                    fontSize: '0.75rem', 
-                                    fontWeight: 700, 
-                                    padding: '4px 8px', 
-                                    borderRadius: '4px',
-                                    marginTop: '6px',
-                                    display: 'inline-block',
-                                    border: '1px solid #a7f3d0'
-                                  }}>
-                                    CorPay: {
-                                      lead.tipo_avaliacao === 'Reavaliação' ? 'R$ 7,00' :
-                                      lead.tipo_financiamento === 'MCMV' ? 'R$ 12,00' : 'R$ 13,00'
-                                    } {lead.categoria ? `(${lead.categoria})` : ''}
-                                  </span>
-                                )}
-                              </div>
+                                 {lead.adicionado_corpay && (() => {
+                                   const lancs = extrairLancamentosCorPay(lead.informacoes_importantes, lead.id, {
+                                     adicionado_corpay: lead.adicionado_corpay,
+                                     tipo_avaliacao: lead.tipo_avaliacao,
+                                     tipo_financiamento: lead.tipo_financiamento,
+                                     data_hora_entrada: lead.data_hora_entrada
+                                   });
+                                   const meusLancs = lancs.filter(l => {
+                                     const a = (l.analista_nome || '').toLowerCase().trim();
+                                     const c = currentAnalistaNome.toLowerCase().trim();
+                                     return a === c || a.includes(c) || c.includes(a);
+                                   });
+                                   if (meusLancs.length === 0) return null;
+                                   const meuTotal = meusLancs.reduce((acc, cur) => acc + Number(cur.valor_remuneracao || 0), 0);
+                                   return (
+                                     <span style={{ 
+                                       backgroundColor: '#ecfdf5', 
+                                       color: '#065f46', 
+                                       fontSize: '0.72rem', 
+                                       fontWeight: 700, 
+                                       padding: '3px 7px', 
+                                       borderRadius: '4px',
+                                       marginTop: '6px',
+                                       display: 'inline-block',
+                                       border: '1px solid #a7f3d0'
+                                     }}>
+                                       Seu CorPay: R$ {meuTotal.toFixed(2)} ({meusLancs.length} op.)
+                                     </span>
+                                   );
+                                 })()}
+
+                                 {searchQuery && !isLeadDoAnalista(lead, currentAnalistaNome) && (
+                                   <button
+                                     type="button"
+                                     onClick={(e) => handleQuickAssumirPasta(e, lead)}
+                                     style={{
+                                       width: '100%',
+                                       marginTop: '8px',
+                                       backgroundColor: '#0a192f',
+                                       color: '#ffffff',
+                                       border: 'none',
+                                       borderRadius: '6px',
+                                       padding: '6px 10px',
+                                       fontSize: '0.72rem',
+                                       fontWeight: 800,
+                                       cursor: 'pointer',
+                                       display: 'flex',
+                                       alignItems: 'center',
+                                       justifyContent: 'center',
+                                       gap: '6px',
+                                       boxShadow: '0 2px 4px rgba(0,0,0,0.15)'
+                                     }}
+                                     title="Assumir pasta / Pegar pendência de outro analista"
+                                   >
+                                     <RotateCw size={12} />
+                                     <span>Assumir Pasta / Pegar Pendência</span>
+                                   </button>
+                                 )}
+                                </div>
 
                               <div className="card-footer">
                                 <span className="card-date">
